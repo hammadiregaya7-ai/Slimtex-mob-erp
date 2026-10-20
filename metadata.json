@@ -1,0 +1,6 @@
+{
+  "name": "TexERP",
+  "description": "Cost & Inventory Management System for textile manufacturing, wholesale, and boutiques",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
