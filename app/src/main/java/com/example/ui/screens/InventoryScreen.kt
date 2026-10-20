@@ -44,6 +44,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -57,6 +58,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -67,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.entity.InventoryItem
 import com.example.data.entity.ItemCategory
+import com.example.data.entity.StockTransaction
 import com.example.data.entity.TransactionType
 import com.example.data.entity.UnitOfMeasure
 import com.example.ui.theme.AmberDark
@@ -76,7 +79,15 @@ import com.example.ui.theme.EmeraldDark
 import com.example.ui.theme.EmeraldLight
 import com.example.ui.viewmodel.ErpViewModel
 import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+
+enum class InventorySortOption(val label: String) {
+    NAME_ASC("Name (A-Z)"),
+    VALUATION_DESC("Highest Value"),
+    STOCK_LOW_FIRST("Low Stock First")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,21 +96,42 @@ fun InventoryScreen(
     modifier: Modifier = Modifier
 ) {
     val items by viewModel.inventoryItems.collectAsStateWithLifecycle()
+    val stockTransactions by viewModel.stockTransactions.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf<ItemCategory?>(null) }
+    var filterLowStockOnly by remember { mutableStateOf(false) }
+    var selectedSort by remember { mutableStateOf(InventorySortOption.NAME_ASC) }
 
     var itemToEdit by remember { mutableStateOf<InventoryItem?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showStockMovementDialog by remember { mutableStateOf(false) }
     var selectedItemForMovement by remember { mutableStateOf<InventoryItem?>(null) }
+    var inspectedItemForHistory by remember { mutableStateOf<InventoryItem?>(null) }
 
     val currencyFormat = NumberFormat.getCurrencyInstance(Locale.US)
 
-    val filteredItems = items.filter { item ->
-        val matchesSearch = item.name.contains(searchQuery, ignoreCase = true) ||
-                item.sku.contains(searchQuery, ignoreCase = true)
-        val matchesCategory = selectedCategory == null || item.category == selectedCategory
-        matchesSearch && matchesCategory
+    val totalValuation = items.sumOf { it.currentStock * it.averageCost }
+    val lowStockCount = items.count { it.currentStock <= it.reorderLevel }
+
+    val filteredItems = remember(items, searchQuery, selectedCategory, filterLowStockOnly, selectedSort) {
+        items.filter { item ->
+            val matchesSearch = item.name.contains(searchQuery, ignoreCase = true) ||
+                    item.sku.contains(searchQuery, ignoreCase = true) ||
+                    item.storageLocation.contains(searchQuery, ignoreCase = true)
+            val matchesCategory = selectedCategory == null || item.category == selectedCategory
+            val matchesLowStock = !filterLowStockOnly || item.currentStock <= item.reorderLevel
+            matchesSearch && matchesCategory && matchesLowStock
+        }.sortedWith { a, b ->
+            when (selectedSort) {
+                InventorySortOption.NAME_ASC -> a.name.compareTo(b.name, ignoreCase = true)
+                InventorySortOption.VALUATION_DESC -> (b.currentStock * b.averageCost).compareTo(a.currentStock * a.averageCost)
+                InventorySortOption.STOCK_LOW_FIRST -> {
+                    val ratioA = if (a.reorderLevel > 0) a.currentStock / a.reorderLevel else 999.0
+                    val ratioB = if (b.reorderLevel > 0) b.currentStock / b.reorderLevel else 999.0
+                    ratioA.compareTo(ratioB)
+                }
+            }
+        }
     }
 
     Box(modifier = modifier.fillMaxSize().testTag("inventory_screen")) {
@@ -123,7 +155,7 @@ fun InventoryScreen(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = "${items.size} total catalog items",
+                        text = "${items.size} catalog SKUs • Total Value: ${currencyFormat.format(totalValuation)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -159,7 +191,7 @@ fun InventoryScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("inventory_search_input"),
-                placeholder = { Text("Search fabrics, yarn, finished apparel, trims by SKU or name...") },
+                placeholder = { Text("Search fabrics, yarn, finished apparel, trims by SKU, name, or aisle...") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -172,19 +204,38 @@ fun InventoryScreen(
                 shape = RoundedCornerShape(10.dp)
             )
 
-            // Category Filter Chips
+            // Category, Low Stock & Sort Filter Chips
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 item {
                     FilterChip(
-                        selected = selectedCategory == null,
-                        onClick = { selectedCategory = null },
-                        label = { Text("All Items") },
-                        leadingIcon = if (selectedCategory == null) {
+                        selected = selectedCategory == null && !filterLowStockOnly,
+                        onClick = {
+                            selectedCategory = null
+                            filterLowStockOnly = false
+                        },
+                        label = { Text("All (${items.size})") },
+                        leadingIcon = if (selectedCategory == null && !filterLowStockOnly) {
                             { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
                         } else null
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = filterLowStockOnly,
+                        onClick = { filterLowStockOnly = !filterLowStockOnly },
+                        label = { Text("Low Stock ($lowStockCount)") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = if (filterLowStockOnly) AmberDark else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        modifier = Modifier.testTag("filter_low_stock_chip")
                     )
                 }
                 items(ItemCategory.values()) { category ->
@@ -197,6 +248,20 @@ fun InventoryScreen(
                         leadingIcon = if (selectedCategory == category) {
                             { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
                         } else null
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = selectedSort != InventorySortOption.NAME_ASC,
+                        onClick = {
+                            val nextIdx = (selectedSort.ordinal + 1) % InventorySortOption.values().size
+                            selectedSort = InventorySortOption.values()[nextIdx]
+                        },
+                        label = { Text("Sort: ${selectedSort.label}") },
+                        leadingIcon = {
+                            Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        modifier = Modifier.testTag("inventory_sort_chip")
                     )
                 }
             }
@@ -231,6 +296,7 @@ fun InventoryScreen(
                         InventoryItemCard(
                             item = item,
                             currencyFormat = currencyFormat,
+                            onInspectHistory = { inspectedItemForHistory = item },
                             onStockMovement = {
                                 selectedItemForMovement = item
                                 showStockMovementDialog = true
@@ -242,6 +308,23 @@ fun InventoryScreen(
                 }
             }
         }
+    }
+
+    // Item Stock History & Unit Economics Modal
+    if (inspectedItemForHistory != null) {
+        val itemHistory = stockTransactions.filter { it.itemId == inspectedItemForHistory!!.id }
+        ItemStockHistoryDialog(
+            item = inspectedItemForHistory!!,
+            transactions = itemHistory,
+            currencyFormat = currencyFormat,
+            onDismiss = { inspectedItemForHistory = null },
+            onRecordMovement = {
+                val target = inspectedItemForHistory
+                inspectedItemForHistory = null
+                selectedItemForMovement = target
+                showStockMovementDialog = true
+            }
+        )
     }
 
     // Add / Edit Item Dialog
@@ -290,16 +373,24 @@ fun InventoryScreen(
 fun InventoryItemCard(
     item: InventoryItem,
     currencyFormat: NumberFormat,
+    onInspectHistory: () -> Unit = {},
     onStockMovement: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     val isLowStock = item.currentStock <= item.reorderLevel
     val totalValuation = item.currentStock * item.averageCost
+    val stockHealthProgress = if (item.reorderLevel > 0) {
+        (item.currentStock / (item.reorderLevel * 2.5)).coerceIn(0.05, 1.0).toFloat()
+    } else 1f
+    val grossMarginPct = if (item.sellingPrice > 0.0 && item.averageCost > 0.0) {
+        ((item.sellingPrice - item.averageCost) / item.sellingPrice) * 100.0
+    } else 0.0
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable { onInspectHistory() }
             .testTag("item_card_${item.id}"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(10.dp)
@@ -337,6 +428,22 @@ fun InventoryItemCard(
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
+                    if (grossMarginPct > 0.0) {
+                        Spacer(Modifier.width(6.dp))
+                        Surface(
+                            color = EmeraldLight.copy(alpha = 0.65f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = String.format(Locale.US, "%.0f%% Margin", grossMarginPct),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = EmeraldDark,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
 
                 if (isLowStock) {
@@ -373,7 +480,7 @@ fun InventoryItemCard(
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                text = "Location: ${item.storageLocation}",
+                text = "Location: ${item.storageLocation} • Reorder Point: ${item.reorderLevel} ${item.unit}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -431,30 +538,52 @@ fun InventoryItemCard(
                 }
             }
 
+            Spacer(Modifier.height(8.dp))
+
+            // Stock Health Progress Bar
+            LinearProgressIndicator(
+                progress = { stockHealthProgress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = if (isLowStock) AmberDark else EmeraldAccent,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+
             Spacer(Modifier.height(10.dp))
 
             // Action row
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(
-                    onClick = onStockMovement,
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.height(36.dp)
+                TextButton(
+                    onClick = onInspectHistory,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                 ) {
-                    Text("Stock In/Out", fontSize = 12.sp)
+                    Text("Stock Ledger →", fontSize = 12.sp)
                 }
 
-                Spacer(Modifier.width(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(
+                        onClick = onStockMovement,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Text(if (isLowStock) "Restock Now" else "Stock In/Out", fontSize = 12.sp)
+                    }
 
-                IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Edit, contentDescription = "Edit", modifier = Modifier.size(18.dp))
-                }
+                    Spacer(Modifier.width(8.dp))
 
-                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFEF4444), modifier = Modifier.size(18.dp))
+                    IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.Edit, contentDescription = "Edit", modifier = Modifier.size(18.dp))
+                    }
+
+                    IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFEF4444), modifier = Modifier.size(18.dp))
+                    }
                 }
             }
         }
@@ -780,3 +909,141 @@ fun StockMovementDialog(
         }
     )
 }
+
+@Composable
+fun ItemStockHistoryDialog(
+    item: InventoryItem,
+    transactions: List<StockTransaction>,
+    currencyFormat: NumberFormat,
+    onDismiss: () -> Unit,
+    onRecordMovement: () -> Unit
+) {
+    val dateFormat = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault())
+    val totalValuation = item.currentStock * item.averageCost
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("${item.sku} • ${item.name}", fontWeight = FontWeight.Bold)
+                Text(
+                    text = "Stock Ledger & Unit Economics (${transactions.size} entries)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text("On-Hand Stock", style = MaterialTheme.typography.labelSmall)
+                                Text(
+                                    "${item.currentStock} ${item.unit}",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("Avg Cost / Retail", style = MaterialTheme.typography.labelSmall)
+                                Text(
+                                    "${currencyFormat.format(item.averageCost)} / ${currencyFormat.format(item.sellingPrice)}",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text("Total Value", style = MaterialTheme.typography.labelSmall)
+                                Text(
+                                    currencyFormat.format(totalValuation),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EmeraldDark
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (transactions.isEmpty()) {
+                    item {
+                        Text(
+                            text = "No stock movement transactions recorded yet for this SKU.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+                    }
+                } else {
+                    items(transactions, key = { it.id }) { tx ->
+                        val isPositive = tx.quantityDelta >= 0
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(8.dp),
+                            tonalElevation = 1.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = tx.type.name.replace('_', ' '),
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Text(
+                                        text = "${tx.referenceNumber} • ${dateFormat.format(Date(tx.timestamp))}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        text = "${if (isPositive) "+" else ""}${tx.quantityDelta} ${item.unit}",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isPositive) EmeraldDark else Color(0xFFDC2626),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Text(
+                                        text = currencyFormat.format(tx.totalCost),
+                                        fontFamily = FontFamily.Monospace,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onRecordMovement,
+                colors = ButtonDefaults.buttonColors(containerColor = EmeraldDark)
+            ) {
+                Text("Record Movement")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+

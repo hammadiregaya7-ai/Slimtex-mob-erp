@@ -35,11 +35,16 @@ data class DashboardMetrics(
     val rawMaterialValuation: Double = 0.0,
     val finishedGoodsValuation: Double = 0.0,
     val totalRevenue: Double = 0.0,
+    val totalExpenses: Double = 0.0,
+    val netProfit: Double = 0.0,
+    val profitMarginPercent: Double = 0.0,
     val accountsReceivable: Double = 0.0,
     val accountsPayable: Double = 0.0,
     val cashAndBankBalance: Double = 0.0,
     val activeBatchesCount: Int = 0,
-    val lowStockCount: Int = 0
+    val lowStockCount: Int = 0,
+    val totalCustomersCount: Int = 0,
+    val customersWithBalanceCount: Int = 0
 )
 
 class ErpViewModel(application: Application) : AndroidViewModel(application) {
@@ -84,8 +89,9 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
         inventoryItems,
         accounts,
         productionOrders,
-        lowStockItems
-    ) { items, accs, orders, lowStock ->
+        lowStockItems,
+        customers
+    ) { items, accs, orders, lowStock, custs ->
         val totalInv = items.sumOf { it.currentStock * it.averageCost }
         val rawInv = items.filter { it.category == ItemCategory.RAW_MATERIAL || it.category == ItemCategory.TRIM || it.category == ItemCategory.DYE_CHEMICAL }
             .sumOf { it.currentStock * it.averageCost }
@@ -94,7 +100,10 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
 
         val ar = accs.find { it.accountCode == "1100" }?.currentBalance ?: 0.0
         val ap = accs.find { it.accountCode == "2000" }?.currentBalance ?: 0.0
-        val rev = accs.find { it.accountCode == "4000" }?.currentBalance ?: 0.0
+        val rev = accs.filter { it.type == com.example.data.entity.AccountType.REVENUE }.sumOf { it.currentBalance }
+        val exp = accs.filter { it.type == com.example.data.entity.AccountType.EXPENSE }.sumOf { it.currentBalance }
+        val netProfit = rev - exp
+        val marginPct = if (rev > 0.0) (netProfit / rev) * 100.0 else 0.0
         val cash = (accs.find { it.accountCode == "1010" }?.currentBalance ?: 0.0) +
                 (accs.find { it.accountCode == "1020" }?.currentBalance ?: 0.0)
         val activeBatches = orders.count { it.status == com.example.data.entity.ProductionStatus.IN_PROGRESS }
@@ -104,11 +113,16 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
             rawMaterialValuation = rawInv,
             finishedGoodsValuation = fgInv,
             totalRevenue = rev,
+            totalExpenses = exp,
+            netProfit = netProfit,
+            profitMarginPercent = marginPct,
             accountsReceivable = ar,
             accountsPayable = ap,
             cashAndBankBalance = cash,
             activeBatchesCount = activeBatches,
-            lowStockCount = lowStock.size
+            lowStockCount = lowStock.size,
+            totalCustomersCount = custs.size,
+            customersWithBalanceCount = custs.count { it.currentBalance > 0.01 }
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardMetrics())
 

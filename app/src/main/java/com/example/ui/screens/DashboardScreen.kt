@@ -141,6 +141,16 @@ fun DashboardScreen(
                         }
 
                         item {
+                            ExecutiveFinancialPulseCard(
+                                metrics = metrics,
+                                currencyFormat = currencyFormat,
+                                onNavigateToClients = onNavigateToClients,
+                                onNavigateToProduction = onNavigateToProduction,
+                                onNavigateToAccounting = onNavigateToAccounting
+                            )
+                        }
+
+                        item {
                             InventoryHealthOverviewCard(
                                 items = items,
                                 lowStockItems = lowStockItems,
@@ -212,6 +222,16 @@ fun DashboardScreen(
                         onNavigateToInventory = onNavigateToInventory,
                         onNavigateToAccounting = onNavigateToAccounting,
                         onNavigateToClients = onNavigateToClients
+                    )
+                }
+
+                item {
+                    ExecutiveFinancialPulseCard(
+                        metrics = metrics,
+                        currencyFormat = currencyFormat,
+                        onNavigateToClients = onNavigateToClients,
+                        onNavigateToProduction = onNavigateToProduction,
+                        onNavigateToAccounting = onNavigateToAccounting
                     )
                 }
 
@@ -967,3 +987,223 @@ fun TransactionInspectDialog(
         }
     )
 }
+
+@Composable
+fun ExecutiveFinancialPulseCard(
+    metrics: com.example.ui.viewmodel.DashboardMetrics,
+    currencyFormat: NumberFormat,
+    onNavigateToClients: () -> Unit,
+    onNavigateToProduction: () -> Unit,
+    onNavigateToAccounting: () -> Unit
+) {
+    val marginFraction = (metrics.profitMarginPercent / 100.0).coerceIn(0.0, 1.0).toFloat()
+    val workingCapital = metrics.cashAndBankBalance + metrics.accountsReceivable + metrics.totalInventoryValuation - metrics.accountsPayable
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("executive_financial_pulse_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(10.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.TrendingUp,
+                        contentDescription = null,
+                        tint = EmeraldAccent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = "Profitability & Client Accounts Pulse",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Real-time operating P&L, net working capital & client credit status",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Surface(
+                    color = if (metrics.netProfit >= 0) EmeraldLight else Color(0xFFFEE2E2),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = String.format(Locale.US, "%.1f%% Margin", metrics.profitMarginPercent),
+                        color = if (metrics.netProfit >= 0) EmeraldDark else Color(0xFFB91C1C),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            // 3-Column Financial Breakdown
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "Net Profit",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = currencyFormat.format(metrics.netProfit),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = if (metrics.netProfit >= 0) EmeraldDark else Color(0xFFDC2626)
+                        )
+                        Text(
+                            text = "COGS/Exp: ${currencyFormat.format(metrics.totalExpenses)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "Working Capital",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = currencyFormat.format(workingCapital),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Net Liquid + Stock",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onNavigateToClients() }
+                        .testTag("pulse_clients_card"),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "Client Directory",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${metrics.totalCustomersCount} Clients",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "${metrics.customersWithBalanceCount} with open AR →",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 10.sp,
+                            color = AmberDark,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            // Margin bar
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Operating Profit Ratio (Net Income vs. Gross Revenue)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "${currencyFormat.format(metrics.netProfit)} / ${currencyFormat.format(metrics.totalRevenue)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                LinearProgressIndicator(
+                    progress = { marginFraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(7.dp)
+                        .clip(RoundedCornerShape(4.dp)),
+                    color = EmeraldAccent,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            }
+
+            // Quick Action Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onNavigateToClients,
+                    modifier = Modifier.weight(1f).testTag("btn_quick_clients"),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Text("Clients & AR", fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = onNavigateToProduction,
+                    modifier = Modifier.weight(1f).testTag("btn_quick_production"),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Text("Cost Sheets (${metrics.activeBatchesCount})", fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = onNavigateToAccounting,
+                    modifier = Modifier.weight(1f).testTag("btn_quick_accounting"),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Text("P&L & Ledger", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+

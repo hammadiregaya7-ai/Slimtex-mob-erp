@@ -201,7 +201,7 @@ fun AccountingScreen(
             }
         }
 
-        // Module Tabs (COA, Clients, Invoices/POs, General Ledger)
+        // Module Tabs (COA, Clients, Invoices/POs, General Ledger, Financial Reports)
         SecondaryTabRow(
             selectedTabIndex = selectedTab,
             modifier = Modifier.fillMaxWidth()
@@ -209,22 +209,28 @@ fun AccountingScreen(
             Tab(
                 selected = selectedTab == 0,
                 onClick = { selectedTab = 0 },
-                text = { Text("Accounts (${accounts.size})") }
+                text = { Text("Accounts (${accounts.size})", fontSize = 12.sp) }
             )
             Tab(
                 selected = selectedTab == 1,
                 onClick = { selectedTab = 1 },
-                text = { Text("Clients (${customers.size})") }
+                text = { Text("Clients (${customers.size})", fontSize = 12.sp) }
             )
             Tab(
                 selected = selectedTab == 2,
                 onClick = { selectedTab = 2 },
-                text = { Text("Invoices & POs (${commercialOrders.size})") }
+                text = { Text("Invoices (${commercialOrders.size})", fontSize = 12.sp) }
             )
             Tab(
                 selected = selectedTab == 3,
                 onClick = { selectedTab = 3 },
-                text = { Text("General Ledger (${journalEntries.size})") }
+                text = { Text("Ledger (${journalEntries.size})", fontSize = 12.sp) }
+            )
+            Tab(
+                selected = selectedTab == 4,
+                onClick = { selectedTab = 4 },
+                text = { Text("P&L & Balance", fontSize = 12.sp) },
+                modifier = Modifier.testTag("tab_financial_statements")
             )
         }
 
@@ -257,6 +263,7 @@ fun AccountingScreen(
                 onRecordPayment = { orderToRecordPayment = it }
             )
             3 -> GeneralLedgerView(entries = journalEntries, currencyFormat = currencyFormat)
+            4 -> FinancialStatementsView(accounts = accounts, currencyFormat = currencyFormat)
         }
     }
 
@@ -1683,3 +1690,337 @@ fun ManualJournalEntryDialog(
         }
     )
 }
+
+@Composable
+fun FinancialStatementsView(
+    accounts: List<Account>,
+    currencyFormat: NumberFormat
+) {
+    val revenueAccounts = accounts.filter { it.type == AccountType.REVENUE }
+    val expenseAccounts = accounts.filter { it.type == AccountType.EXPENSE }
+    val assetAccounts = accounts.filter { it.type == AccountType.ASSET }
+    val liabilityAccounts = accounts.filter { it.type == AccountType.LIABILITY }
+    val equityAccounts = accounts.filter { it.type == AccountType.EQUITY }
+
+    val totalRevenue = revenueAccounts.sumOf { it.currentBalance }
+    val totalExpenses = expenseAccounts.sumOf { it.currentBalance }
+    val netIncome = totalRevenue - totalExpenses
+    val netMarginPct = if (totalRevenue > 0.0) (netIncome / totalRevenue) * 100.0 else 0.0
+
+    val totalAssets = assetAccounts.sumOf { it.currentBalance }
+    val totalLiabilities = liabilityAccounts.sumOf { it.currentBalance }
+    val baseEquity = equityAccounts.sumOf { it.currentBalance }
+    val totalEquityWithRetained = baseEquity + netIncome
+    val totalLiabilitiesAndEquity = totalLiabilities + totalEquityWithRetained
+    val isBalanced = kotlin.math.abs(totalAssets - totalLiabilitiesAndEquity) < 1.0
+
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("financial_statements_view")
+    ) {
+        // 1. Income Statement (Profit & Loss) Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(10.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Income Statement (Profit & Loss)",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Operating revenues, manufacturing COGS & net margin",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Surface(
+                            color = if (netIncome >= 0) EmeraldLight else Color(0xFFFEE2E2),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = String.format(Locale.US, "Net Margin: %.1f%%", netMarginPct),
+                                color = if (netIncome >= 0) EmeraldDark else Color(0xFFB91C1C),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Divider()
+
+                    Text(
+                        text = "OPERATING REVENUE",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = EmeraldDark
+                    )
+                    revenueAccounts.forEach { acc ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("${acc.accountCode} • ${acc.accountName}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                currencyFormat.format(acc.currentBalance),
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Total Gross Revenue", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            currencyFormat.format(totalRevenue),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = EmeraldDark
+                        )
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+
+                    Text(
+                        text = "COST OF GOODS SOLD & OPERATING EXPENSES",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = AmberDark
+                    )
+                    expenseAccounts.forEach { acc ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("${acc.accountCode} • ${acc.accountName}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                currencyFormat.format(acc.currentBalance),
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Total COGS & Expenses", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            currencyFormat.format(totalExpenses),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFDC2626)
+                        )
+                    }
+
+                    Divider()
+
+                    Surface(
+                        color = if (netIncome >= 0) EmeraldLight.copy(alpha = 0.45f) else Color(0xFFFEE2E2),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "NET OPERATING INCOME",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = currencyFormat.format(netIncome),
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (netIncome >= 0) EmeraldDark else Color(0xFFB91C1C)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Balance Sheet Snapshot Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(10.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Balance Sheet Statement",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Assets vs. Liabilities & Owner's Equity",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Surface(
+                            color = if (isBalanced) EmeraldLight else AmberLight,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = if (isBalanced) EmeraldDark else AmberDark,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = if (isBalanced) "BALANCED" else "RECONCILE",
+                                    color = if (isBalanced) EmeraldDark else AmberDark,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Text(
+                        text = "ASSETS (CURRENT & INVENTORY)",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    assetAccounts.forEach { acc ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("${acc.accountCode} • ${acc.accountName}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                currencyFormat.format(acc.currentBalance),
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Total Assets", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            currencyFormat.format(totalAssets),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+
+                    Text(
+                        text = "LIABILITIES & OWNER'S EQUITY",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = AmberDark
+                    )
+                    liabilityAccounts.forEach { acc ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("${acc.accountCode} • ${acc.accountName}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                currencyFormat.format(acc.currentBalance),
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    equityAccounts.forEach { acc ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("${acc.accountCode} • ${acc.accountName}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                currencyFormat.format(acc.currentBalance),
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Retained / Current Period Net Income", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            currencyFormat.format(netIncome),
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (netIncome >= 0) EmeraldDark else Color(0xFFDC2626)
+                        )
+                    }
+
+                    Divider()
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "Total Liabilities & Equity",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            currencyFormat.format(totalLiabilitiesAndEquity),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = EmeraldDark
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+

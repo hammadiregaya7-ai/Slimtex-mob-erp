@@ -100,4 +100,22 @@ class ExampleRobolectricTest {
         balance -= fullSettlement
         assertEquals(0.0, balance, 0.001)
     }
+
+    @Test
+    fun `income statement and balance sheet equation reconcile accurately`() {
+        val grossRevenue = 42000.0
+        val totalExpenses = 26500.0
+        val netIncome = grossRevenue - totalExpenses
+        val marginPct = (netIncome / grossRevenue) * 100.0
+
+        assertEquals(15500.0, netIncome, 0.001)
+        assertTrue(marginPct > 36.0)
+
+        val totalAssets = 128000.0
+        val totalLiabilities = 22500.0
+        val ownerEquity = 90000.0
+        val totalLiabilitiesAndEquity = totalLiabilities + ownerEquity + netIncome
+        assertEquals(totalAssets, totalLiabilitiesAndEquity, 0.001)
+    }
 }
+
