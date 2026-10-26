@@ -13,6 +13,12 @@ import com.example.data.entity.ProductionStatus
 import com.example.data.entity.StockTransaction
 import com.example.data.entity.TransactionType
 import com.example.data.entity.Customer
+import com.example.data.entity.ErpCurrency
+import com.example.data.entity.ErpRole
+import com.example.data.entity.FabricRollLot
+import com.example.data.entity.RollQualityGrade
+import com.example.data.entity.StockThresholdAlert
+import com.example.data.entity.Supplier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -23,6 +29,68 @@ class ErpRepository(private val db: AppDatabase) {
     private val accountingDao = db.accountingDao()
     private val commercialDao = db.commercialDao()
     private val customerDao = db.customerDao()
+    private val supplierDao = db.supplierDao()
+    private val traceabilityDao = db.traceabilityDao()
+
+    // --- Supplier / Mill Directory Streams & Actions ---
+    val allSuppliers: Flow<List<Supplier>> = supplierDao.getAllSuppliers()
+
+    suspend fun saveSupplier(supplier: Supplier): Long = withContext(Dispatchers.IO) {
+        if (supplier.id == 0L) {
+            supplierDao.insertSupplier(supplier)
+        } else {
+            supplierDao.updateSupplier(supplier)
+            supplier.id
+        }
+    }
+
+    suspend fun deleteSupplier(id: Long) = withContext(Dispatchers.IO) {
+        supplierDao.deleteSupplier(id)
+    }
+
+    suspend fun recordSupplierDirectPayment(supplierId: Long, amount: Double, memo: String) = withContext(Dispatchers.IO) {
+        val supplier = supplierDao.getSupplierById(supplierId) ?: return@withContext
+        supplierDao.adjustSupplierApBalance(supplierId, -amount)
+
+        accountingDao.recordBalancedEntry(
+            entry = JournalEntry(
+                entryNumber = "JE-${System.currentTimeMillis() % 100000}",
+                memo = "AP Settlement to ${supplier.name}: $memo",
+                sourceReference = supplier.code,
+                totalAmount = amount
+            ),
+            lines = listOf(
+                JournalLine(0L, 0L, "2000", "Accounts Payable (AP)", debit = amount, credit = 0.0),
+                JournalLine(0L, 0L, "1020", "Operating Bank Account", debit = 0.0, credit = amount)
+            )
+        )
+    }
+
+    // --- Fabric Roll & Dye-Lot Traceability Streams & Actions ---
+    val allRollLots: Flow<List<FabricRollLot>> = traceabilityDao.getAllRollLots()
+
+    suspend fun saveRollLot(rollLot: FabricRollLot): Long = withContext(Dispatchers.IO) {
+        if (rollLot.id == 0L) {
+            traceabilityDao.insertRollLot(rollLot)
+        } else {
+            traceabilityDao.updateRollLot(rollLot)
+            rollLot.id
+        }
+    }
+
+    suspend fun updateRollInspection(
+        rollId: Long,
+        defectPoints: Int,
+        grade: RollQualityGrade,
+        shadeBand: String,
+        notes: String
+    ) = withContext(Dispatchers.IO) {
+        traceabilityDao.updateRollInspection(rollId, defectPoints, grade, shadeBand, notes)
+    }
+
+    suspend fun deleteRollLot(id: Long) = withContext(Dispatchers.IO) {
+        traceabilityDao.deleteRollLot(id)
+    }
 
     // --- Customer / Client Streams & Actions ---
     val allCustomers: Flow<List<Customer>> = customerDao.getAllCustomers()
@@ -70,18 +138,71 @@ class ErpRepository(private val db: AppDatabase) {
     // --- Inventory Streams & Actions ---
     val allItems: Flow<List<InventoryItem>> = inventoryDao.getAllItems()
     val lowStockItems: Flow<List<InventoryItem>> = inventoryDao.getLowStockItems()
+    val criticalStockItems: Flow<List<InventoryItem>> = inventoryDao.getCriticalStockItems()
+    val categoryStockSummaries: Flow<List<com.example.data.entity.CategoryStockSummary>> = inventoryDao.getCategoryStockSummaries()
+    val activeThresholdAlerts: Flow<List<com.example.data.entity.StockThresholdAlert>> = inventoryDao.getActiveThresholdAlerts()
     val stockTransactions: Flow<List<StockTransaction>> = inventoryDao.getAllTransactions()
 
+    fun getItemsByCategory(category: com.example.data.entity.ItemCategory): Flow<List<InventoryItem>> {
+        return inventoryDao.getItemsByCategory(category)
+    }
+
+    private suspend fun syncItemThresholdAlert(itemId: Long) {
+        val updated = inventoryDao.getItemById(itemId) ?: return
+        inventoryDao.deleteAlertsForItem(itemId)
+        if (updated.isLowStock) {
+            inventoryDao.insertThresholdAlert(
+                com.example.data.entity.StockThresholdAlert(
+                    itemId = updated.id,
+                    sku = updated.sku,
+                    itemName = updated.name,
+                    category = updated.category,
+                    unit = updated.unit,
+                    currentStock = updated.currentStock,
+                    thresholdLevel = updated.reorderLevel,
+                    criticalLevel = updated.criticalThreshold,
+                    severity = updated.alertSeverity,
+                    deficitQuantity = updated.stockDeficit,
+                    recommendedOrderQuantity = updated.recommendedRestockQty
+                )
+            )
+        }
+    }
+
     suspend fun saveItem(item: InventoryItem): Long = withContext(Dispatchers.IO) {
-        if (item.id == 0L) {
+        val savedId = if (item.id == 0L) {
             inventoryDao.insertItem(item)
         } else {
             inventoryDao.updateItem(item)
             item.id
         }
+        syncItemThresholdAlert(savedId)
+        savedId
+    }
+
+    suspend fun updateItemThresholdConfig(
+        itemId: Long,
+        reorderLevel: Double,
+        criticalThreshold: Double,
+        autoAlertEnabled: Boolean,
+        leadTimeDays: Int
+    ) = withContext(Dispatchers.IO) {
+        inventoryDao.updateThresholdConfig(
+            id = itemId,
+            reorderLevel = reorderLevel,
+            criticalThreshold = criticalThreshold,
+            autoAlertEnabled = autoAlertEnabled,
+            leadTimeDays = leadTimeDays
+        )
+        syncItemThresholdAlert(itemId)
+    }
+
+    suspend fun acknowledgeThresholdAlert(alertId: Long) = withContext(Dispatchers.IO) {
+        inventoryDao.acknowledgeThresholdAlert(alertId)
     }
 
     suspend fun deleteItem(id: Long) = withContext(Dispatchers.IO) {
+        inventoryDao.deleteAlertsForItem(id)
         inventoryDao.deleteItem(id)
     }
 
@@ -98,6 +219,7 @@ class ErpRepository(private val db: AppDatabase) {
 
         // Adjust inventory
         inventoryDao.adjustStock(itemId, delta)
+        syncItemThresholdAlert(itemId)
 
         // Log transaction
         inventoryDao.insertTransaction(
@@ -331,26 +453,104 @@ class ErpRepository(private val db: AppDatabase) {
         )
     }
 
-    // --- Commercial Orders (Sales & Purchasing) ---
+    // --- Commercial Orders (Sales, Quotations, Purchasing, Approval Gates & Document Chaining) ---
     val allCommercialOrders = commercialDao.getAllOrders()
+    val pendingApprovalOrders = commercialDao.getPendingApprovalOrders()
 
     fun getCommercialOrderItems(orderId: Long): Flow<List<CommercialOrderItem>> =
         commercialDao.getItemsForOrder(orderId)
 
+    suspend fun generatePurchaseOrderForLowStockAlert(
+        alert: StockThresholdAlert,
+        activeRole: ErpRole
+    ): Long = withContext(Dispatchers.IO) {
+        val item = inventoryDao.getItemById(alert.itemId)
+        val supplierName = item?.preferredSupplier?.ifBlank { "Indus Spinning & Weaving Mills" }
+            ?: "Indus Spinning & Weaving Mills"
+        val supplier = supplierDao.getSupplierByName(supplierName)
+        val unitCost = item?.averageCost ?: 5.0
+        val qty = alert.recommendedOrderQuantity.coerceAtLeast(10.0)
+        val lineTotal = qty * unitCost
+        val needsControllerGate = lineTotal >= 5000.0 && !activeRole.canApproveHighValuePo
+
+        val currency = ErpCurrency.fromCode(supplier?.currencyCode ?: "USD")
+        val poNumber = "PO-2026-${(System.currentTimeMillis() % 900) + 100}"
+
+        val order = CommercialOrder(
+            orderNumber = poNumber,
+            type = CommercialType.PURCHASE_ORDER,
+            partyName = supplierName,
+            supplierId = supplier?.id ?: 0L,
+            status = if (needsControllerGate) CommercialStatus.PENDING_APPROVAL else CommercialStatus.CONFIRMED,
+            requiresApproval = needsControllerGate,
+            approvedByRole = if (!needsControllerGate) activeRole.displayName else "",
+            currencyCode = currency.code,
+            exchangeRateToUsd = currency.rateToUsd,
+            incoterms = "CIF",
+            parentDocumentRef = "ALERT-${alert.sku}",
+            notes = "Auto-generated from Low-Stock Threshold Alert (${alert.sku})"
+        )
+        val items = listOf(
+            CommercialOrderItem(
+                orderId = 0L,
+                itemId = alert.itemId,
+                itemName = alert.itemName,
+                unit = alert.unit,
+                quantity = qty,
+                unitPrice = unitCost,
+                lineTotal = lineTotal
+            )
+        )
+        val orderId = commercialDao.createOrderWithItems(order, items)
+        if (!needsControllerGate && supplier != null) {
+            supplierDao.adjustSupplierApBalance(supplier.id, lineTotal)
+        }
+        inventoryDao.acknowledgeThresholdAlert(alert.id)
+        orderId
+    }
+
     suspend fun createCommercialOrder(
         order: CommercialOrder,
-        items: List<CommercialOrderItem>
+        items: List<CommercialOrderItem>,
+        activeRole: ErpRole = ErpRole.EXECUTIVE_CONTROLLER
     ): Long = withContext(Dispatchers.IO) {
-        val orderId = commercialDao.createOrderWithItems(order, items)
         val total = items.sumOf { it.lineTotal }
+        var requiresGate = order.requiresApproval
 
-        // Post accounting entry for confirmed order
+        if (order.type == CommercialType.PURCHASE_ORDER && total >= 5000.0 && !activeRole.canApproveHighValuePo) {
+            requiresGate = true
+        }
+        if (order.type == CommercialType.COMMERCIAL_INVOICE && order.customerId != 0L) {
+            val customer = customerDao.getCustomerById(order.customerId)
+            if (customer != null && (customer.currentBalance + total) > customer.creditLimit && !activeRole.canOverrideCreditLimit) {
+                requiresGate = true
+            }
+        }
+
+        val finalOrder = order.copy(
+            status = if (requiresGate) CommercialStatus.PENDING_APPROVAL else order.status,
+            requiresApproval = requiresGate,
+            approvedByRole = if (!requiresGate && order.approvedByRole.isBlank()) activeRole.displayName else order.approvedByRole
+        )
+
+        val orderId = commercialDao.createOrderWithItems(finalOrder, items)
+
+        if (!requiresGate) {
+            postOrderAccountingAndStockEffects(finalOrder.copy(id = orderId, totalAmount = total), items)
+        }
+        orderId
+    }
+
+    private suspend fun postOrderAccountingAndStockEffects(
+        order: CommercialOrder,
+        items: List<CommercialOrderItem>
+    ) {
+        val total = items.sumOf { it.lineTotal }
         if (order.type == CommercialType.COMMERCIAL_INVOICE) {
-            // Debit Accounts Receivable (1100), Credit Sales Revenue (4000)
             accountingDao.recordBalancedEntry(
                 entry = JournalEntry(
                     entryNumber = "JE-${System.currentTimeMillis() % 100000}",
-                    memo = "Commercial Invoice ${order.orderNumber} for ${order.partyName}",
+                    memo = "Commercial Invoice ${order.orderNumber} for ${order.partyName} (${order.currencyCode})",
                     sourceReference = order.orderNumber,
                     totalAmount = total
                 ),
@@ -360,9 +560,9 @@ class ErpRepository(private val db: AppDatabase) {
                 )
             )
 
-            // Adjust inventory for finished goods sold if items are in stock
             for (item in items) {
                 inventoryDao.adjustStock(item.itemId, -item.quantity)
+                syncItemThresholdAlert(item.itemId)
                 inventoryDao.insertTransaction(
                     StockTransaction(
                         itemId = item.itemId,
@@ -377,12 +577,123 @@ class ErpRepository(private val db: AppDatabase) {
                 )
             }
 
-            // Update customer balance if linked
             if (order.customerId != 0L) {
                 customerDao.adjustCustomerBalance(order.customerId, total)
             }
+        } else if (order.type == CommercialType.PURCHASE_ORDER && order.supplierId != 0L) {
+            supplierDao.adjustSupplierApBalance(order.supplierId, total)
         }
-        orderId
+    }
+
+    suspend fun approveCommercialOrder(orderId: Long, approvedByRole: String) = withContext(Dispatchers.IO) {
+        val order = commercialDao.getOrderById(orderId) ?: return@withContext
+        if (order.status != CommercialStatus.PENDING_APPROVAL) return@withContext
+        val items = commercialDao.getItemsForOrderSync(orderId)
+
+        commercialDao.approveOrder(orderId, approvedByRole)
+        postOrderAccountingAndStockEffects(
+            order.copy(status = CommercialStatus.CONFIRMED, requiresApproval = false, approvedByRole = approvedByRole),
+            items
+        )
+    }
+
+    suspend fun chainQuotationToWorkOrder(quoteId: Long): Long = withContext(Dispatchers.IO) {
+        val quote = commercialDao.getOrderById(quoteId) ?: return@withContext 0L
+        val items = commercialDao.getItemsForOrderSync(quoteId)
+        val firstLine = items.firstOrNull() ?: return@withContext 0L
+        val batchNum = "BAT-2026-${(System.currentTimeMillis() % 800) + 150}"
+
+        val allInv = inventoryDao.getAllItems()
+        // Estimate standard raw material requirement (2.0m fabric per garment unit)
+        val targetQty = firstLine.quantity.coerceAtLeast(10.0)
+        val labor = targetQty * 3.25
+        val overhead = targetQty * 1.40
+        val estMaterialCost = targetQty * 7.50
+        val totalBatch = estMaterialCost + labor + overhead
+
+        val prodId = productionDao.insertOrder(
+            ProductionOrder(
+                batchNumber = batchNum,
+                finishedItemId = firstLine.itemId,
+                finishedItemName = firstLine.itemName,
+                targetQuantity = targetQty,
+                completedQuantity = 0.0,
+                status = ProductionStatus.IN_PROGRESS,
+                directLaborCost = labor,
+                overheadCost = overhead,
+                rawMaterialCost = estMaterialCost,
+                totalBatchCost = totalBatch,
+                unitProductionCost = totalBatch / targetQty,
+                notes = "Chained from Sales Quotation ${quote.orderNumber} for ${quote.partyName}"
+            )
+        )
+        commercialDao.updateLinkedBatchNumber(quoteId, batchNum)
+        prodId
+    }
+
+    suspend fun chainQuotationToInvoice(quoteId: Long, activeRole: ErpRole): Long = withContext(Dispatchers.IO) {
+        val quote = commercialDao.getOrderById(quoteId) ?: return@withContext 0L
+        val items = commercialDao.getItemsForOrderSync(quoteId)
+        val totalUnits = items.sumOf { it.quantity }.toInt().coerceAtLeast(1)
+        val cartons = (totalUnits / 20).coerceAtLeast(1)
+        val netKg = totalUnits * 0.42
+        val grossKg = netKg + (cartons * 1.1)
+        val invNum = "INV-2026-${(System.currentTimeMillis() % 800) + 120}"
+        val pklNum = "PKL-${invNum.removePrefix("INV-")}"
+
+        val invoiceOrder = CommercialOrder(
+            orderNumber = invNum,
+            type = CommercialType.COMMERCIAL_INVOICE,
+            partyName = quote.partyName,
+            customerId = quote.customerId,
+            status = CommercialStatus.CONFIRMED,
+            currencyCode = quote.currencyCode,
+            exchangeRateToUsd = quote.exchangeRateToUsd,
+            incoterms = quote.incoterms,
+            parentDocumentRef = quote.orderNumber,
+            linkedBatchNumber = quote.linkedBatchNumber,
+            packingListNumber = pklNum,
+            totalCartons = cartons,
+            netWeightKg = netKg,
+            grossWeightKg = grossKg,
+            hsTariffCode = quote.hsTariffCode,
+            portOfLoading = quote.portOfLoading,
+            portOfDischarge = quote.portOfDischarge,
+            notes = "Chained from ${quote.orderNumber}" +
+                if (quote.linkedBatchNumber.isNotBlank()) " & Work Order ${quote.linkedBatchNumber}" else ""
+        )
+
+        val newInvoiceId = createCommercialOrder(
+            order = invoiceOrder,
+            items = items.map { it.copy(id = 0L, orderId = 0L) },
+            activeRole = activeRole
+        )
+        commercialDao.updateOrder(quote.copy(status = CommercialStatus.FULFILLED))
+        newInvoiceId
+    }
+
+    suspend fun updateExportPackingList(
+        orderId: Long,
+        packingListNumber: String,
+        totalCartons: Int,
+        netWeightKg: Double,
+        grossWeightKg: Double,
+        hsTariffCode: String,
+        incoterms: String,
+        portOfLoading: String,
+        portOfDischarge: String
+    ) = withContext(Dispatchers.IO) {
+        commercialDao.updateExportPackingList(
+            orderId = orderId,
+            packingListNumber = packingListNumber,
+            totalCartons = totalCartons,
+            netWeightKg = netWeightKg,
+            grossWeightKg = grossWeightKg,
+            hsTariffCode = hsTariffCode,
+            incoterms = incoterms,
+            portOfLoading = portOfLoading,
+            portOfDischarge = portOfDischarge
+        )
     }
 
     suspend fun recordPayment(orderId: Long, paymentAmount: Double, bankAccountCode: String = "1020") =
@@ -408,7 +719,10 @@ class ErpRepository(private val db: AppDatabase) {
                         JournalLine(0L, 0L, "1100", "Accounts Receivable (AR)", debit = 0.0, credit = paymentAmount)
                     )
                 )
-            } else {
+            } else if (order.type == CommercialType.PURCHASE_ORDER) {
+                if (order.supplierId != 0L) {
+                    supplierDao.adjustSupplierApBalance(order.supplierId, -paymentAmount)
+                }
                 // Paid supplier: Debit Accounts Payable (2000), Credit Bank (1020)
                 accountingDao.recordBalancedEntry(
                     entry = JournalEntry(

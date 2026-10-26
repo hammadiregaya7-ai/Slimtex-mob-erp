@@ -117,5 +117,104 @@ class ExampleRobolectricTest {
         val totalLiabilitiesAndEquity = totalLiabilities + ownerEquity + netIncome
         assertEquals(totalAssets, totalLiabilitiesAndEquity, 0.001)
     }
-}
 
+    @Test
+    fun `erpnext bom template scales raw material quantities with scrap allowance`() {
+        val targetUnits = 100.0
+        val fabricMetersPerUnit = 1.8
+        val scrapPercent = 5.0
+        val scrapMultiplier = 1.0 + (scrapPercent / 100.0)
+        val requiredFabricMeters = fabricMetersPerUnit * targetUnits * scrapMultiplier
+
+        // 100 units * 1.8m * 1.05 = 189.0 meters
+        assertEquals(189.0, requiredFabricMeters, 0.001)
+    }
+
+    @Test
+    fun `erpnext apparel variant matrix generates accurate color and size sku combinations`() {
+        val skuPrefix = "FG-OXF"
+        val colors = listOf("Indigo", "Ivory")
+        val sizes = listOf("S", "M", "L")
+        val generatedSkus = colors.flatMap { c ->
+            sizes.map { s -> "$skuPrefix-${c.take(3).uppercase()}-$s" }
+        }
+
+        assertEquals(6, generatedSkus.size)
+        assertTrue(generatedSkus.contains("FG-OXF-IND-M"))
+        assertTrue(generatedSkus.contains("FG-OXF-IVO-L"))
+    }
+
+    @Test
+    fun `inventory item category and low stock threshold alert severity evaluate accurately`() {
+        val criticalDye = com.example.data.entity.InventoryItem(
+            id = 9L,
+            sku = "DC-IND-01",
+            name = "Natural Indigo Vat Dye Concentrate",
+            category = com.example.data.entity.ItemCategory.DYE_CHEMICAL,
+            unit = com.example.data.entity.UnitOfMeasure.KG,
+            currentStock = 28.0,
+            reorderLevel = 80.0,
+            criticalThreshold = 35.0,
+            averageCost = 18.50
+        )
+
+        assertTrue(criticalDye.isLowStock)
+        assertTrue(criticalDye.isCriticalStock)
+        assertEquals(com.example.data.entity.StockAlertSeverity.CRITICAL, criticalDye.alertSeverity)
+        assertEquals(52.0, criticalDye.stockDeficit, 0.001)
+        assertEquals(132.0, criticalDye.recommendedRestockQty, 0.001)
+        assertEquals("Dyes & Chemicals", criticalDye.category.displayName)
+    }
+
+    @Test
+    fun `fabric roll 4 point inspection system evaluates pass and quarantine accurately`() {
+        val gradeARoll = com.example.data.entity.FabricRollLot(
+            id = 1L,
+            rollNumber = "ROLL-2026-881",
+            dyeLotCode = "LOT-LIN-26A",
+            itemId = 1L,
+            itemSku = "FAB-101",
+            itemName = "Organic White Linen Fabric",
+            supplierName = "Nile Delta Spinning & Weaving",
+            shadeBand = "A1",
+            lengthMeters = 120.0,
+            gsm = 165,
+            widthCm = 150,
+            defectPointsPer100SqYds = 8,
+            qualityGrade = com.example.data.entity.RollQualityGrade.A_GRADE
+        )
+
+        val quarantinedRoll = gradeARoll.copy(
+            id = 2L,
+            rollNumber = "ROLL-2026-883",
+            defectPointsPer100SqYds = 34,
+            qualityGrade = com.example.data.entity.RollQualityGrade.QUARANTINED
+        )
+
+        assertTrue(gradeARoll.passesFourPointSystem)
+        assertTrue(!quarantinedRoll.passesFourPointSystem)
+    }
+
+    @Test
+    fun `multi currency conversion and role approval gate rules evaluate accurately`() {
+        val euroOrder = com.example.data.entity.CommercialOrder(
+            id = 10L,
+            orderNumber = "QT-2026-014",
+            type = com.example.data.entity.CommercialType.SALES_QUOTATION,
+            partyName = "Atelier Milano S.r.l.",
+            totalAmount = 6300.0,
+            paidAmount = 0.0,
+            status = com.example.data.entity.CommercialStatus.CONFIRMED,
+            currencyCode = "EUR",
+            exchangeRateToUsd = 1.08
+        )
+
+        // 6300 USD / 1.08 USD per EUR = 5833.33 EUR
+        assertEquals(5833.33, euroOrder.foreignCurrencyTotal, 0.05)
+
+        val controller = com.example.data.entity.ErpRole.EXECUTIVE_CONTROLLER
+        val prodManager = com.example.data.entity.ErpRole.PRODUCTION_MANAGER
+        assertTrue(controller.canApproveHighValuePo)
+        assertTrue(!prodManager.canApproveHighValuePo)
+    }
+}

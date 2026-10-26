@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -592,7 +593,9 @@ fun ClientsSummaryCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(12.dp)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        shape = RoundedCornerShape(14.dp)
     ) {
         Row(
             modifier = Modifier
@@ -779,7 +782,12 @@ fun ClientListItemCard(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
             else MaterialTheme.colorScheme.surface
         ),
-        shape = RoundedCornerShape(10.dp)
+        border = BorderStroke(
+            if (isSelected) 1.5.dp else 1.dp,
+            if (isSelected) EmeraldDark else MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        shape = RoundedCornerShape(14.dp)
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -1246,6 +1254,7 @@ fun ClientDossierPanel(
                                         CommercialStatus.PAID -> EmeraldDark
                                         CommercialStatus.CONFIRMED -> Color(0xFF2563EB)
                                         CommercialStatus.FULFILLED -> EmeraldAccent
+                                        CommercialStatus.PENDING_APPROVAL -> AmberDark
                                         CommercialStatus.DRAFT -> Color(0xFF6B7280)
                                         CommercialStatus.CANCELLED -> Color(0xFFEF4444)
                                     }

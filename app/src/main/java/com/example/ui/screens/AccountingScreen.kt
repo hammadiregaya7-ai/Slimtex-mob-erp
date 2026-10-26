@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -259,11 +260,18 @@ fun AccountingScreen(
             )
             2 -> CommercialOrdersView(
                 orders = commercialOrders,
+                viewModel = viewModel,
+                inventoryItems = inventoryItems,
                 currencyFormat = currencyFormat,
                 onRecordPayment = { orderToRecordPayment = it }
             )
             3 -> GeneralLedgerView(entries = journalEntries, currencyFormat = currencyFormat)
-            4 -> FinancialStatementsView(accounts = accounts, currencyFormat = currencyFormat)
+            4 -> FinancialStatementsView(
+                accounts = accounts,
+                orders = commercialOrders,
+                customers = customers,
+                currencyFormat = currencyFormat
+            )
         }
     }
 
@@ -324,7 +332,7 @@ fun AccountingScreen(
         )
     }
 
-    // Create Invoice / PO Dialog with Client Autocomplete
+    // Create Quote / Invoice / PO Dialog with Multi-Currency & Incoterms
     if (showCreateCommercialDialog) {
         CreateCommercialOrderDialog(
             inventoryItems = inventoryItems,
@@ -334,14 +342,17 @@ fun AccountingScreen(
                 showCreateCommercialDialog = false
                 preselectedCustomerForInvoice = null
             },
-            onConfirm = { orderNumber, type, partyName, notes, items, customerId ->
+            onConfirm = { orderNumber, type, partyName, notes, items, customerId, currency, incoterms ->
                 viewModel.createCommercialOrder(
                     orderNumber = orderNumber,
                     type = type,
                     partyName = partyName,
                     notes = notes,
                     items = items,
-                    customerId = customerId
+                    customerId = customerId,
+                    currencyCode = currency.code,
+                    exchangeRateToUsd = currency.rateToUsd,
+                    incoterms = incoterms
                 )
                 showCreateCommercialDialog = false
                 preselectedCustomerForInvoice = null
@@ -585,7 +596,9 @@ fun CustomerCard(
             .fillMaxWidth()
             .testTag("customer_card_${customer.id}"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(10.dp)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        shape = RoundedCornerShape(14.dp)
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // Header: Code, Name, Terms
@@ -1012,7 +1025,9 @@ fun ChartOfAccountsView(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        shape = RoundedCornerShape(8.dp)
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
                         Row(
                             modifier = Modifier
@@ -1085,7 +1100,9 @@ fun GeneralLedgerView(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    shape = RoundedCornerShape(10.dp)
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(
@@ -1154,12 +1171,19 @@ fun GeneralLedgerView(
 @Composable
 fun CommercialOrdersView(
     orders: List<CommercialOrder>,
+    viewModel: ErpViewModel,
+    inventoryItems: List<InventoryItem>,
     currencyFormat: NumberFormat,
     onRecordPayment: (CommercialOrder) -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val activeRole by viewModel.activeRole.collectAsStateWithLifecycle()
+    val selectedCurrency by viewModel.selectedCurrency.collectAsStateWithLifecycle()
+    var orderForPackingList by remember { mutableStateOf<CommercialOrder?>(null) }
+
     if (orders.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No commercial invoices or purchase orders found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("No commercial quotations, invoices, or purchase orders found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     } else {
         LazyColumn(
@@ -1168,48 +1192,90 @@ fun CommercialOrdersView(
         ) {
             items(orders, key = { it.id }) { order ->
                 val isInvoice = order.type == CommercialType.COMMERCIAL_INVOICE
+                val isQuote = order.type == CommercialType.SALES_QUOTATION
                 val balanceDue = order.totalAmount - order.paidAmount
-                val isPaid = balanceDue <= 0.01
+                val isPaid = balanceDue <= 0.01 && !isQuote
+                val isPendingApproval = order.status == CommercialStatus.PENDING_APPROVAL
+
+                val (badgeBg, badgeFg, badgeLabel) = when (order.type) {
+                    CommercialType.COMMERCIAL_INVOICE -> Triple(EmeraldLight, EmeraldDark, "CLIENT INVOICE")
+                    CommercialType.PURCHASE_ORDER -> Triple(Color(0xFFDBEAFE), Color(0xFF1D4ED8), "PURCHASE ORDER")
+                    CommercialType.SALES_QUOTATION -> Triple(Color(0xFFEDE9FE), Color(0xFF6D28D9), "SALES QUOTATION")
+                }
 
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().testTag("commercial_order_card_${order.id}"),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    shape = RoundedCornerShape(10.dp)
+                    border = BorderStroke(
+                        1.dp,
+                        if (isPendingApproval) Color(0xFFDC2626).copy(alpha = 0.45f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    shape = RoundedCornerShape(14.dp)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    color = if (isInvoice) EmeraldLight else Color(0xFFDBEAFE),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Surface(color = badgeBg, shape = RoundedCornerShape(6.dp)) {
                                     Text(
-                                        text = if (isInvoice) "CLIENT INVOICE" else "PURCHASE ORDER",
+                                        text = badgeLabel,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp,
-                                        color = if (isInvoice) EmeraldDark else Color(0xFF1D4ED8),
+                                        fontSize = 10.sp,
+                                        color = badgeFg,
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
                                 }
-                                Spacer(Modifier.width(8.dp))
                                 Text(
                                     text = order.orderNumber,
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold
                                 )
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = "${order.currencyCode} • ${order.incoterms}",
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
 
                             Surface(
-                                color = if (isPaid) EmeraldLight else AmberLight,
+                                color = when {
+                                    isPendingApproval -> Color(0xFFFEE2E2)
+                                    isQuote -> Color(0xFFEDE9FE)
+                                    isPaid -> EmeraldLight
+                                    else -> AmberLight
+                                },
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Text(
-                                    text = if (isPaid) "PAID" else "BALANCE DUE",
-                                    color = if (isPaid) EmeraldDark else AmberDark,
+                                    text = when {
+                                        isPendingApproval -> "APPROVAL GATE"
+                                        isQuote -> "OPEN QUOTE"
+                                        isPaid -> "PAID"
+                                        else -> "BALANCE DUE"
+                                    },
+                                    color = when {
+                                        isPendingApproval -> Color(0xFFB91C1C)
+                                        isQuote -> Color(0xFF6D28D9)
+                                        isPaid -> EmeraldDark
+                                        else -> AmberDark
+                                    },
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -1217,12 +1283,69 @@ fun CommercialOrdersView(
                             }
                         }
 
-                        Spacer(Modifier.height(8.dp))
                         Text(
                             text = order.partyName,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
+
+                        // Document Chaining & Export Packing List Lineage Strip
+                        if (order.parentDocumentRef.isNotBlank() || order.linkedBatchNumber.isNotBlank() || order.packingListNumber.isNotBlank() || order.approvedByRole.isNotBlank()) {
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                if (order.parentDocumentRef.isNotBlank()) {
+                                    item {
+                                        Surface(color = Color(0xFFEDE9FE), shape = RoundedCornerShape(6.dp)) {
+                                            Text(
+                                                text = "Chained from: ${order.parentDocumentRef}",
+                                                fontSize = 10.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                color = Color(0xFF6D28D9),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                if (order.linkedBatchNumber.isNotBlank()) {
+                                    item {
+                                        Surface(color = Color(0xFFDBEAFE), shape = RoundedCornerShape(6.dp)) {
+                                            Text(
+                                                text = "Work Order: ${order.linkedBatchNumber}",
+                                                fontSize = 10.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                color = Color(0xFF1D4ED8),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                if (order.packingListNumber.isNotBlank()) {
+                                    item {
+                                        Surface(color = EmeraldLight, shape = RoundedCornerShape(6.dp)) {
+                                            Text(
+                                                text = "Packing List: ${order.packingListNumber} (${order.totalCartons} ctns • ${order.grossWeightKg} kg)",
+                                                fontSize = 10.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                color = EmeraldDark,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                if (order.approvedByRole.isNotBlank()) {
+                                    item {
+                                        Surface(color = EmeraldLight.copy(alpha = 0.6f), shape = RoundedCornerShape(6.dp)) {
+                                            Text(
+                                                text = "Approved: ${order.approvedByRole}",
+                                                fontSize = 10.sp,
+                                                color = EmeraldDark,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         if (order.notes.isNotBlank()) {
                             Text(
                                 text = order.notes,
@@ -1231,7 +1354,7 @@ fun CommercialOrdersView(
                             )
                         }
 
-                        Spacer(Modifier.height(10.dp))
+                        val orderCurrency = com.example.data.entity.ErpCurrency.fromCode(order.currencyCode)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1239,7 +1362,7 @@ fun CommercialOrdersView(
                         ) {
                             Column {
                                 Text(
-                                    text = "Total Amount",
+                                    text = "Total (USD / ${orderCurrency.code})",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1249,11 +1372,27 @@ fun CommercialOrdersView(
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.titleMedium
                                 )
+                                if (orderCurrency != com.example.data.entity.ErpCurrency.USD) {
+                                    Text(
+                                        text = "${orderCurrency.symbol}${String.format(Locale.US, "%,.2f", order.foreignCurrencyTotal)} (${orderCurrency.code})",
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else if (selectedCurrency != com.example.data.entity.ErpCurrency.USD) {
+                                    val converted = if (selectedCurrency.rateToUsd > 0) order.totalAmount / selectedCurrency.rateToUsd else order.totalAmount
+                                    Text(
+                                        text = "≈ ${selectedCurrency.symbol}${String.format(Locale.US, "%,.2f", converted)} (${selectedCurrency.code})",
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
 
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
-                                    text = "Paid",
+                                    text = "Settled",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1267,7 +1406,7 @@ fun CommercialOrdersView(
 
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
-                                    text = "Balance Due",
+                                    text = if (isQuote) "Quoted Value" else "Balance Due",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1275,23 +1414,121 @@ fun CommercialOrdersView(
                                     text = currencyFormat.format(balanceDue),
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (balanceDue > 0) Color(0xFFEF4444) else EmeraldDark
+                                    color = if (!isQuote && balanceDue > 0) Color(0xFFEF4444) else EmeraldDark
                                 )
                             }
                         }
 
-                        if (!isPaid) {
-                            Spacer(Modifier.height(10.dp))
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                                Button(
-                                    onClick = { onRecordPayment(order) },
+                        // Action Bar: Role Approval Gate, Document Chaining, Packing List, Print/Share, Payment
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (isPendingApproval) {
+                                item {
+                                    Button(
+                                        onClick = { viewModel.approveCommercialOrder(order.id) },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (activeRole.canApproveHighValuePo) Color(0xFFB91C1C) else AmberDark
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.height(34.dp).testTag("btn_approve_order_${order.id}")
+                                    ) {
+                                        Text(
+                                            text = if (activeRole.canApproveHighValuePo) "Approve (${activeRole.displayName})" else "Switch to Controller to Approve",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (isQuote) {
+                                item {
+                                    Button(
+                                        onClick = { viewModel.chainQuotationToWorkOrder(order.id) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8)),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.height(34.dp).testTag("btn_chain_work_order_${order.id}")
+                                    ) {
+                                        Text("Chain → Work Order", fontSize = 11.sp)
+                                    }
+                                }
+                                item {
+                                    Button(
+                                        onClick = { viewModel.chainQuotationToInvoice(order.id) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldDark),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.height(34.dp).testTag("btn_chain_invoice_${order.id}")
+                                    ) {
+                                        Text("Convert → Invoice", fontSize = 11.sp)
+                                    }
+                                }
+                            }
+
+                            if (isInvoice) {
+                                item {
+                                    OutlinedButton(
+                                        onClick = { orderForPackingList = order },
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.height(34.dp).testTag("btn_packing_list_${order.id}")
+                                    ) {
+                                        Text(
+                                            if (order.packingListNumber.isNotBlank()) "Packing List (${order.packingListNumber})" else "+ Packing List",
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (!isPaid && !isQuote && !isPendingApproval) {
+                                item {
+                                    Button(
+                                        onClick = { onRecordPayment(order) },
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldDark),
+                                        modifier = Modifier.height(34.dp).testTag("btn_record_payment_${order.id}")
+                                    ) {
+                                        Icon(Icons.Default.CreditCard, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Record Payment", fontSize = 11.sp)
+                                    }
+                                }
+                            }
+
+                            item {
+                                OutlinedButton(
+                                    onClick = {
+                                        val text = com.example.util.ErpDocumentExporter.formatCommercialDocumentText(order, emptyList())
+                                        com.example.util.ErpDocumentExporter.printDocumentHtml(
+                                            context = context,
+                                            jobName = "TexERP_${order.orderNumber}",
+                                            title = "${order.type.name.replace('_', ' ')} • ${order.orderNumber}",
+                                            preformattedBody = text
+                                        )
+                                    },
                                     shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDark),
-                                    modifier = Modifier.height(36.dp)
+                                    modifier = Modifier.height(34.dp).testTag("btn_print_order_${order.id}")
                                 ) {
-                                    Icon(Icons.Default.CreditCard, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Record Payment", fontSize = 12.sp)
+                                    Text("Print PDF", fontSize = 11.sp)
+                                }
+                            }
+
+                            item {
+                                OutlinedButton(
+                                    onClick = {
+                                        val text = com.example.util.ErpDocumentExporter.formatCommercialDocumentText(order, emptyList())
+                                        com.example.util.ErpDocumentExporter.shareDocumentText(
+                                            context = context,
+                                            title = "TexERP Document ${order.orderNumber}",
+                                            content = text
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.height(34.dp).testTag("btn_share_order_${order.id}")
+                                ) {
+                                    Text("Share", fontSize = 11.sp)
                                 }
                             }
                         }
@@ -1300,6 +1537,211 @@ fun CommercialOrdersView(
             }
         }
     }
+
+    if (orderForPackingList != null) {
+        ExportPackingListDialog(
+            order = orderForPackingList!!,
+            onDismiss = { orderForPackingList = null },
+            onSave = { pklNo, cartons, netKg, grossKg, hsCode, incoterms, portLoad, portDis ->
+                viewModel.updateExportPackingList(
+                    orderId = orderForPackingList!!.id,
+                    packingListNumber = pklNo,
+                    totalCartons = cartons,
+                    netWeightKg = netKg,
+                    grossWeightKg = grossKg,
+                    hsTariffCode = hsCode,
+                    incoterms = incoterms,
+                    portOfLoading = portLoad,
+                    portOfDischarge = portDis
+                )
+                orderForPackingList = null
+            }
+        )
+    }
+}
+
+@Composable
+fun ExportPackingListDialog(
+    order: CommercialOrder,
+    onDismiss: () -> Unit,
+    onSave: (
+        packingListNumber: String,
+        totalCartons: Int,
+        netWeightKg: Double,
+        grossWeightKg: Double,
+        hsTariffCode: String,
+        incoterms: String,
+        portOfLoading: String,
+        portOfDischarge: String
+    ) -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var packingListNo by remember {
+        mutableStateOf(order.packingListNumber.ifBlank { "PKL-2026-${(100..999).random()}" })
+    }
+    var cartonsText by remember { mutableStateOf(if (order.totalCartons > 0) order.totalCartons.toString() else "12") }
+    var netWeightText by remember { mutableStateOf(if (order.netWeightKg > 0) order.netWeightKg.toString() else "148.0") }
+    var grossWeightText by remember { mutableStateOf(if (order.grossWeightKg > 0) order.grossWeightKg.toString() else "164.5") }
+    var hsCode by remember { mutableStateOf(order.hsTariffCode.ifBlank { "6205.90.40" }) }
+    var incoterms by remember { mutableStateOf(order.incoterms.ifBlank { "CIF" }) }
+    var portLoad by remember { mutableStateOf(order.portOfLoading.ifBlank { "Port of Alexandria" }) }
+    var portDis by remember { mutableStateOf(order.portOfDischarge.ifBlank { "Port of Genoa, Italy" }) }
+
+    val incotermOptions = listOf("FOB", "CIF", "DDP", "EXW")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Export Shipping Packing List • ${order.orderNumber}") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item {
+                    OutlinedTextField(
+                        value = packingListNo,
+                        onValueChange = { packingListNo = it },
+                        label = { Text("Packing List Number") },
+                        modifier = Modifier.fillMaxWidth().testTag("input_pkl_number")
+                    )
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = cartonsText,
+                            onValueChange = { cartonsText = it },
+                            label = { Text("Total Cartons") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f).testTag("input_pkl_cartons")
+                        )
+                        OutlinedTextField(
+                            value = hsCode,
+                            onValueChange = { hsCode = it },
+                            label = { Text("HS Tariff Code") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = netWeightText,
+                            onValueChange = { netWeightText = it },
+                            label = { Text("Net Weight (kg)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = grossWeightText,
+                            onValueChange = { grossWeightText = it },
+                            label = { Text("Gross Weight (kg)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                item {
+                    Text("Incoterms 2020", style = MaterialTheme.typography.labelSmall)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(incotermOptions) { term ->
+                            FilterChip(
+                                selected = incoterms == term,
+                                onClick = { incoterms = term },
+                                label = { Text(term, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+                item {
+                    OutlinedTextField(
+                        value = portLoad,
+                        onValueChange = { portLoad = it },
+                        label = { Text("Port of Loading") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = portDis,
+                        onValueChange = { portDis = it },
+                        label = { Text("Port of Discharge / Destination") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                val updated = order.copy(
+                                    packingListNumber = packingListNo,
+                                    totalCartons = cartonsText.toIntOrNull() ?: 12,
+                                    netWeightKg = netWeightText.toDoubleOrNull() ?: 148.0,
+                                    grossWeightKg = grossWeightText.toDoubleOrNull() ?: 164.5,
+                                    hsTariffCode = hsCode,
+                                    incoterms = incoterms,
+                                    portOfLoading = portLoad,
+                                    portOfDischarge = portDis
+                                )
+                                val text = com.example.util.ErpDocumentExporter.formatCommercialDocumentText(updated, emptyList())
+                                com.example.util.ErpDocumentExporter.printDocumentHtml(
+                                    context = context,
+                                    jobName = "PackingList_$packingListNo",
+                                    title = "Export Packing List • $packingListNo",
+                                    preformattedBody = text
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Print Packing List", fontSize = 11.sp)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                val updated = order.copy(
+                                    packingListNumber = packingListNo,
+                                    totalCartons = cartonsText.toIntOrNull() ?: 12,
+                                    netWeightKg = netWeightText.toDoubleOrNull() ?: 148.0,
+                                    grossWeightKg = grossWeightText.toDoubleOrNull() ?: 164.5,
+                                    hsTariffCode = hsCode,
+                                    incoterms = incoterms,
+                                    portOfLoading = portLoad,
+                                    portOfDischarge = portDis
+                                )
+                                val text = com.example.util.ErpDocumentExporter.formatCommercialDocumentText(updated, emptyList())
+                                com.example.util.ErpDocumentExporter.shareDocumentText(
+                                    context = context,
+                                    title = "Export Packing List $packingListNo",
+                                    content = text
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Share Manifest", fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(
+                        packingListNo,
+                        cartonsText.toIntOrNull() ?: 12,
+                        netWeightText.toDoubleOrNull() ?: 148.0,
+                        grossWeightText.toDoubleOrNull() ?: 164.5,
+                        hsCode,
+                        incoterms,
+                        portLoad,
+                        portDis
+                    )
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = EmeraldDark),
+                modifier = Modifier.testTag("btn_save_packing_list")
+            ) {
+                Text("Save Packing List")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
 }
 
 @Composable
@@ -1366,39 +1808,71 @@ fun CreateCommercialOrderDialog(
         partyName: String,
         notes: String,
         items: List<CommercialOrderItem>,
-        customerId: Long
+        customerId: Long,
+        currency: com.example.data.entity.ErpCurrency,
+        incoterms: String
     ) -> Unit
 ) {
     var type by remember { mutableStateOf(if (initialCustomer != null) CommercialType.COMMERCIAL_INVOICE else CommercialType.COMMERCIAL_INVOICE) }
     var orderNumber by remember {
-        mutableStateOf(
-            if (type == CommercialType.COMMERCIAL_INVOICE) "INV-${(1000..9999).random()}" else "PO-${(1000..9999).random()}"
-        )
+        mutableStateOf("INV-${(1000..9999).random()}")
     }
     var selectedCustomer by remember { mutableStateOf(initialCustomer) }
     var partyName by remember { mutableStateOf(initialCustomer?.name ?: "") }
     var notes by remember { mutableStateOf(if (initialCustomer != null) "Payment terms: ${initialCustomer.paymentTerms}" else "") }
+    var selectedCurrency by remember { mutableStateOf(com.example.data.entity.ErpCurrency.USD) }
+    var selectedIncoterms by remember { mutableStateOf("FOB") }
 
     var customerDropdownExpanded by remember { mutableStateOf(false) }
 
     // Item selection
-    val candidateItems = if (type == CommercialType.COMMERCIAL_INVOICE) {
-        inventoryItems.filter { it.category == ItemCategory.FINISHED_GOOD }
-    } else {
+    val candidateItems = if (type == CommercialType.PURCHASE_ORDER) {
         inventoryItems.filter { it.category != ItemCategory.FINISHED_GOOD }
+    } else {
+        inventoryItems.filter { it.category == ItemCategory.FINISHED_GOOD }
     }
-    var selectedItem by remember { mutableStateOf(candidateItems.firstOrNull()) }
+    var selectedItem by remember(type) { mutableStateOf(candidateItems.firstOrNull()) }
     var quantityText by remember { mutableStateOf("50") }
-    var unitPriceText by remember { mutableStateOf(selectedItem?.sellingPrice?.toString() ?: "35.0") }
+    var unitPriceText by remember(selectedItem, type) {
+        mutableStateOf(
+            if (type == CommercialType.PURCHASE_ORDER) {
+                selectedItem?.averageCost?.toString() ?: "9.20"
+            } else {
+                selectedItem?.sellingPrice?.toString() ?: "35.0"
+            }
+        )
+    }
     var itemDropdownExpanded by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (type == CommercialType.COMMERCIAL_INVOICE) "New Client Commercial Invoice" else "New Supplier Purchase Order") },
+        title = {
+            Text(
+                when (type) {
+                    CommercialType.COMMERCIAL_INVOICE -> "New Client Commercial Invoice"
+                    CommercialType.PURCHASE_ORDER -> "New Supplier Purchase Order"
+                    CommercialType.SALES_QUOTATION -> "New B2B Sales Quotation"
+                }
+            )
+        },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(
+                            onClick = {
+                                type = CommercialType.SALES_QUOTATION
+                                orderNumber = "QT-${(1000..9999).random()}"
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (type == CommercialType.SALES_QUOTATION) Color(0xFF6D28D9) else MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = if (type == CommercialType.SALES_QUOTATION) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                            modifier = Modifier.weight(1f).testTag("type_btn_quote")
+                        ) {
+                            Text("Quote", fontSize = 11.sp)
+                        }
+
                         Button(
                             onClick = {
                                 type = CommercialType.COMMERCIAL_INVOICE
@@ -1408,9 +1882,9 @@ fun CreateCommercialOrderDialog(
                                 containerColor = if (type == CommercialType.COMMERCIAL_INVOICE) EmeraldDark else MaterialTheme.colorScheme.surfaceVariant,
                                 contentColor = if (type == CommercialType.COMMERCIAL_INVOICE) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                             ),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).testTag("type_btn_invoice")
                         ) {
-                            Text("Sales Invoice")
+                            Text("Invoice", fontSize = 11.sp)
                         }
 
                         Button(
@@ -1423,9 +1897,9 @@ fun CreateCommercialOrderDialog(
                                 containerColor = if (type == CommercialType.PURCHASE_ORDER) Color(0xFF1D4ED8) else MaterialTheme.colorScheme.surfaceVariant,
                                 contentColor = if (type == CommercialType.PURCHASE_ORDER) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                             ),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).testTag("type_btn_po")
                         ) {
-                            Text("Purchase Order")
+                            Text("PO", fontSize = 11.sp)
                         }
                     }
                 }
@@ -1434,13 +1908,27 @@ fun CreateCommercialOrderDialog(
                     OutlinedTextField(
                         value = orderNumber,
                         onValueChange = { orderNumber = it },
-                        label = { Text("Order / Invoice #") },
+                        label = { Text("Document Number") },
                         modifier = Modifier.fillMaxWidth().testTag("input_order_number")
                     )
                 }
 
-                // If Sales Invoice, allow picking from Customer Directory!
-                if (type == CommercialType.COMMERCIAL_INVOICE && customers.isNotEmpty()) {
+                // Currency & Incoterms Selector
+                item {
+                    Text("Settlement Currency & Incoterms", style = MaterialTheme.typography.labelSmall)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(com.example.data.entity.ErpCurrency.values()) { curr ->
+                            FilterChip(
+                                selected = selectedCurrency == curr,
+                                onClick = { selectedCurrency = curr },
+                                label = { Text("${curr.code} (${curr.symbol})", fontSize = 10.sp) }
+                            )
+                        }
+                    }
+                }
+
+                // If Sales Quote or Invoice, allow picking from Customer Directory
+                if (type != CommercialType.PURCHASE_ORDER && customers.isNotEmpty()) {
                     item {
                         ExposedDropdownMenuBox(
                             expanded = customerDropdownExpanded,
@@ -1477,7 +1965,7 @@ fun CreateCommercialOrderDialog(
                     OutlinedTextField(
                         value = partyName,
                         onValueChange = { partyName = it },
-                        label = { Text(if (type == CommercialType.COMMERCIAL_INVOICE) "Buyer / Client Company Name" else "Supplier / Mill Name") },
+                        label = { Text(if (type == CommercialType.PURCHASE_ORDER) "Supplier / Mill Name" else "Buyer / Client Company Name") },
                         modifier = Modifier.fillMaxWidth().testTag("input_party_name")
                     )
                 }
@@ -1504,7 +1992,7 @@ fun CreateCommercialOrderDialog(
                                     text = { Text("${itm.sku} - ${itm.name}") },
                                     onClick = {
                                         selectedItem = itm
-                                        unitPriceText = if (type == CommercialType.COMMERCIAL_INVOICE) itm.sellingPrice.toString() else itm.averageCost.toString()
+                                        unitPriceText = if (type == CommercialType.PURCHASE_ORDER) itm.averageCost.toString() else itm.sellingPrice.toString()
                                         itemDropdownExpanded = false
                                     }
                                 )
@@ -1525,7 +2013,7 @@ fun CreateCommercialOrderDialog(
                         OutlinedTextField(
                             value = unitPriceText,
                             onValueChange = { unitPriceText = it },
-                            label = { Text("Unit Price ($)") },
+                            label = { Text("Unit Price (USD)") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.weight(1f)
                         )
@@ -1559,7 +2047,16 @@ fun CreateCommercialOrderDialog(
                             lineTotal = qty * price
                         )
                     )
-                    onConfirm(orderNumber, type, partyName, notes, items, selectedCustomer?.id ?: 0L)
+                    onConfirm(
+                        orderNumber,
+                        type,
+                        partyName,
+                        notes,
+                        items,
+                        selectedCustomer?.id ?: 0L,
+                        selectedCurrency,
+                        selectedIncoterms
+                    )
                 },
                 enabled = partyName.isNotBlank() && selectedItem != null && (quantityText.toDoubleOrNull() ?: 0.0) > 0
             ) {
@@ -1694,6 +2191,8 @@ fun ManualJournalEntryDialog(
 @Composable
 fun FinancialStatementsView(
     accounts: List<Account>,
+    orders: List<CommercialOrder> = emptyList(),
+    customers: List<Customer> = emptyList(),
     currencyFormat: NumberFormat
 ) {
     val revenueAccounts = accounts.filter { it.type == AccountType.REVENUE }
@@ -2021,6 +2520,110 @@ fun FinancialStatementsView(
                 }
             }
         }
+
+        // 3. ERPNext Accounts Receivable & Payable Aging Schedule (0-30, 31-60, 61-90, 90+ Days)
+        item {
+            val nowMs = System.currentTimeMillis()
+            val dayMs = 24L * 60L * 60L * 1000L
+            val openSalesInvoices = orders.filter {
+                it.type == CommercialType.COMMERCIAL_INVOICE && (it.totalAmount - it.paidAmount) > 0.01
+            }
+            val ar0to30 = openSalesInvoices.filter { ((nowMs - it.timestamp) / dayMs) <= 30 }.sumOf { it.totalAmount - it.paidAmount }
+            val ar31to60 = openSalesInvoices.filter { ((nowMs - it.timestamp) / dayMs) in 31..60 }.sumOf { it.totalAmount - it.paidAmount }
+            val ar61to90 = openSalesInvoices.filter { ((nowMs - it.timestamp) / dayMs) in 61..90 }.sumOf { it.totalAmount - it.paidAmount }
+            val ar90Plus = openSalesInvoices.filter { ((nowMs - it.timestamp) / dayMs) > 90 }.sumOf { it.totalAmount - it.paidAmount }
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("ar_aging_report_card"),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(10.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "ERPNext Accounts Receivable Aging Schedule",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Unsettled client invoice balances grouped by aging bucket (${openSalesInvoices.size} open invoices)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AgingBucketPill("0–30 Days", currencyFormat.format(ar0to30), EmeraldDark, Modifier.weight(1f))
+                        AgingBucketPill("31–60 Days", currencyFormat.format(ar31to60), AmberDark, Modifier.weight(1f))
+                        AgingBucketPill("61–90 Days", currencyFormat.format(ar61to90), Color(0xFFEA580C), Modifier.weight(1f))
+                        AgingBucketPill("90+ Overdue", currencyFormat.format(ar90Plus), Color(0xFFDC2626), Modifier.weight(1f))
+                    }
+
+                    val clientsWithBalance = customers.filter { it.currentBalance > 0.01 }
+                    if (clientsWithBalance.isNotEmpty()) {
+                        Divider()
+                        Text(
+                            text = "CLIENT AR EXPOSURE LEDGER",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        clientsWithBalance.forEach { client ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    "${client.code} • ${client.name} (${client.paymentTerms})",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    currencyFormat.format(client.currentBalance),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AmberDark
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
+
+@Composable
+private fun AgingBucketPill(
+    label: String,
+    valueText: String,
+    accentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, fontSize = 10.sp)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                valueText,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp,
+                color = accentColor
+            )
+        }
+    }
+}
+
 

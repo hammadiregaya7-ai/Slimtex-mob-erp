@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -331,7 +332,12 @@ fun ProductionOrderCard(
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
         ),
-        shape = RoundedCornerShape(10.dp)
+        border = BorderStroke(
+            if (isSelected) 1.5.dp else 1.dp,
+            if (isSelected) EmeraldDark else MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        shape = RoundedCornerShape(14.dp)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
@@ -389,6 +395,7 @@ fun CostSheetDetailView(
     onCompleteBatch: () -> Unit,
     finishedItem: InventoryItem?
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
 
     // Calculations
@@ -405,7 +412,9 @@ fun CostSheetDetailView(
             .fillMaxSize()
             .testTag("cost_sheet_detail"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(12.dp)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        shape = RoundedCornerShape(16.dp)
     ) {
         LazyColumn(
             modifier = Modifier
@@ -415,37 +424,82 @@ fun CostSheetDetailView(
         ) {
             // Header
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Cost Sheet: ${order.batchNumber}",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                ProductionStatusBadge(status = order.status)
+                            }
                             Text(
-                                text = "Cost Sheet: ${order.batchNumber}",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
+                                text = "Product: ${order.finishedItemName} (${order.targetQuantity.toInt()} units target)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Spacer(Modifier.width(10.dp))
-                            ProductionStatusBadge(status = order.status)
                         }
-                        Text(
-                            text = "Product: ${order.finishedItemName} (${order.targetQuantity.toInt()} units target)",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+
+                        if (order.status != ProductionStatus.COMPLETED) {
+                            Button(
+                                onClick = onCompleteBatch,
+                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldDark),
+                                modifier = Modifier.testTag("btn_complete_production")
+                            ) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Complete & Stock In")
+                            }
+                        }
                     }
 
-                    if (order.status != ProductionStatus.COMPLETED) {
-                        Button(
-                            onClick = onCompleteBatch,
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldDark),
-                            modifier = Modifier.testTag("btn_complete_production")
+                    // Export & Print Cost Sheet Actions
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                val text = com.example.util.ErpDocumentExporter.formatProductionCostSheetText(
+                                    order = order,
+                                    materials = materials
+                                )
+                                com.example.util.ErpDocumentExporter.printDocumentHtml(
+                                    context = context,
+                                    jobName = "TexERP_CostSheet_${order.batchNumber}",
+                                    title = "Manufacturing Cost Sheet • ${order.batchNumber}",
+                                    preformattedBody = text
+                                )
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(32.dp).testTag("btn_print_cost_sheet")
                         ) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Complete & Stock In")
+                            Text("Print Cost Sheet", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                val text = com.example.util.ErpDocumentExporter.formatProductionCostSheetText(
+                                    order = order,
+                                    materials = materials
+                                )
+                                com.example.util.ErpDocumentExporter.shareDocumentText(
+                                    context = context,
+                                    title = "Manufacturing Cost Sheet ${order.batchNumber}",
+                                    content = text
+                                )
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(32.dp).testTag("btn_share_cost_sheet")
+                        ) {
+                            Text("Share Cost Sheet", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -641,6 +695,11 @@ fun CostSheetDetailView(
                 }
             }
 
+            // Section 3: ERPNext Workstation Job Cards & Quality Inspection (QI)
+            item {
+                WorkstationRoutingCard(order = order)
+            }
+
             // Completion notes or status
             item {
                 if (order.status == ProductionStatus.COMPLETED) {
@@ -662,6 +721,131 @@ fun CostSheetDetailView(
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+data class BomComponentSpec(
+    val skuPrefix: String,
+    val fallbackName: String,
+    val unit: UnitOfMeasure,
+    val qtyPerFinishedUnit: Double,
+    val fallbackUnitCost: Double
+)
+
+data class ErpBomTemplate(
+    val bomCode: String,
+    val name: String,
+    val targetSkuHint: String,
+    val scrapPercent: Double,
+    val laborPerUnit: Double,
+    val overheadPerUnit: Double,
+    val operations: List<String>,
+    val components: List<BomComponentSpec>
+)
+
+val STANDARD_TEXTILE_BOMS = listOf(
+    ErpBomTemplate(
+        bomCode = "BOM-LINEN-001",
+        name = "Tailored Linen Shirt (1.8m Linen + Buttons + Thread)",
+        targetSkuHint = "FG-301",
+        scrapPercent = 5.0,
+        laborPerUnit = 2.80,
+        overheadPerUnit = 1.10,
+        operations = listOf("Spreading & CAD Cutting", "Collar & Cuff Interfacing", "Lockstitch Assembly", "Steam Press & AQL 2.5 QC"),
+        components = listOf(
+            BomComponentSpec("FAB-101", "Organic White Linen Fabric", UnitOfMeasure.METERS, 1.8, 6.50),
+            BomComponentSpec("TRM-201", "Mother of Pearl Buttons", UnitOfMeasure.PIECES, 8.0, 0.15),
+            BomComponentSpec("TRM-202", "Polyester Core Spun Thread", UnitOfMeasure.ROLLS, 0.05, 3.20)
+        )
+    ),
+    ErpBomTemplate(
+        bomCode = "BOM-DENIM-002",
+        name = "Selvedge Denim Jacket (2.4m Indigo Denim + Brass Hardware)",
+        targetSkuHint = "FG-302",
+        scrapPercent = 7.5,
+        laborPerUnit = 4.50,
+        overheadPerUnit = 1.90,
+        operations = listOf("Heavyweight Laser Cutting", "Twin-Needle Chainstitch", "Enzyme Garment Wash", "Rivet Setting & Final QC"),
+        components = listOf(
+            BomComponentSpec("FAB-102", "Raw Indigo Selvedge Denim", UnitOfMeasure.METERS, 2.4, 9.20),
+            BomComponentSpec("TRM-202", "Polyester Core Spun Thread", UnitOfMeasure.ROLLS, 0.08, 3.20),
+            BomComponentSpec("CHEM-401", "Reactive Indigo Dye Vat", UnitOfMeasure.KG, 0.12, 18.00)
+        )
+    )
+)
+
+@Composable
+fun WorkstationRoutingCard(order: ProductionOrder) {
+    val stages = listOf(
+        "1. Spreading & Cutting",
+        "2. Sewing & Assembly",
+        "3. Wash & Steam Press",
+        "4. Quality Inspection (QI)"
+    )
+    var currentStageIndex by remember(order.id, order.status) {
+        mutableStateOf(if (order.status == ProductionStatus.COMPLETED) 3 else 1)
+    }
+    var qiVerified by remember(order.id, order.status) {
+        mutableStateOf(order.status == ProductionStatus.COMPLETED)
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("workstation_routing_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "3. Workstation Routing & Quality Inspection (ERPNext Job Cards)",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(
+                        text = "Tap a floor workstation operation to update active job stage",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                FilterChip(
+                    selected = qiVerified,
+                    onClick = { qiVerified = !qiVerified },
+                    label = {
+                        Text(
+                            if (qiVerified) "QI PASSED (AQL 2.5)" else "Mark QI Passed",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    leadingIcon = if (qiVerified) {
+                        { Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldDark, modifier = Modifier.size(15.dp)) }
+                    } else null,
+                    modifier = Modifier.testTag("qi_inspection_chip")
+                )
+            }
+
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(stages.size) { idx ->
+                    val isDoneOrActive = idx <= currentStageIndex
+                    FilterChip(
+                        selected = isDoneOrActive,
+                        onClick = { currentStageIndex = idx },
+                        label = { Text(stages[idx], fontSize = 11.sp) }
+                    )
                 }
             }
         }
@@ -736,17 +920,71 @@ fun CreateBatchDialog(
     var directLaborText by remember { mutableStateOf("500") }
     var overheadText by remember { mutableStateOf("250") }
     var notes by remember { mutableStateOf("") }
+    var selectedBomTemplate by remember { mutableStateOf<ErpBomTemplate?>(null) }
 
     var finishedItemDropdownExpanded by remember { mutableStateOf(false) }
 
     // Selected raw materials BOM for this batch
     val bomList = remember { mutableStateListOf<ProductionMaterialItem>() }
 
+    fun applyBomTemplate(template: ErpBomTemplate, qty: Double) {
+        selectedBomTemplate = template
+        val targetFG = finishedGoods.find { it.sku.startsWith(template.targetSkuHint, ignoreCase = true) }
+        if (targetFG != null) {
+            selectedFinishedItem = targetFG
+        }
+        val scrapMultiplier = 1.0 + (template.scrapPercent / 100.0)
+        directLaborText = String.format(Locale.US, "%.2f", template.laborPerUnit * qty)
+        overheadText = String.format(Locale.US, "%.2f", template.overheadPerUnit * qty)
+        notes = "BOM: ${template.bomCode} (${template.scrapPercent}% scrap allowance) • Routing: ${template.operations.joinToString(" → ")}"
+
+        bomList.clear()
+        template.components.forEach { spec ->
+            val matchedRaw = rawMaterials.find { it.sku.startsWith(spec.skuPrefix, ignoreCase = true) }
+            val requiredQty = kotlin.math.round((spec.qtyPerFinishedUnit * qty * scrapMultiplier) * 100.0) / 100.0
+            val unitCost = matchedRaw?.averageCost ?: spec.fallbackUnitCost
+            bomList.add(
+                ProductionMaterialItem(
+                    productionOrderId = 0L,
+                    itemId = matchedRaw?.id ?: 0L,
+                    itemName = matchedRaw?.name ?: spec.fallbackName,
+                    unit = matchedRaw?.unit ?: spec.unit,
+                    quantityRequired = requiredQty,
+                    unitCost = unitCost,
+                    totalCost = requiredQty * unitCost
+                )
+            )
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("New Manufacturing Production Batch") },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item {
+                    Text(
+                        text = "ERPNext Multi-Level BOM Templates (Auto-calculates Materials + Scrap %)",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = EmeraldDark
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(STANDARD_TEXTILE_BOMS) { tpl ->
+                            FilterChip(
+                                selected = selectedBomTemplate?.bomCode == tpl.bomCode,
+                                onClick = {
+                                    val qty = targetQuantityText.toDoubleOrNull() ?: 250.0
+                                    applyBomTemplate(tpl, qty)
+                                },
+                                label = { Text("${tpl.bomCode} (${tpl.scrapPercent}% Scrap)", fontSize = 11.sp) },
+                                modifier = Modifier.testTag("bom_template_${tpl.bomCode}")
+                            )
+                        }
+                    }
+                }
+
                 item {
                     OutlinedTextField(
                         value = batchNumber,
@@ -789,11 +1027,47 @@ fun CreateBatchDialog(
                 item {
                     OutlinedTextField(
                         value = targetQuantityText,
-                        onValueChange = { targetQuantityText = it },
+                        onValueChange = {
+                            targetQuantityText = it
+                            val newQty = it.toDoubleOrNull()
+                            if (newQty != null && newQty > 0 && selectedBomTemplate != null) {
+                                applyBomTemplate(selectedBomTemplate!!, newQty)
+                            }
+                        },
                         label = { Text("Target Units to Manufacture") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth().testTag("input_batch_qty")
                     )
+                }
+
+                if (bomList.isNotEmpty()) {
+                    item {
+                        Surface(
+                            color = EmeraldLight.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = "Auto-Computed BOM Requisition (${bomList.size} items incl. scrap):",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EmeraldDark
+                                )
+                                bomList.forEach { mat ->
+                                    Text(
+                                        text = "• ${mat.itemName}: ${mat.quantityRequired} ${mat.unit}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 item {
@@ -819,7 +1093,7 @@ fun CreateBatchDialog(
                     OutlinedTextField(
                         value = notes,
                         onValueChange = { notes = it },
-                        label = { Text("Batch Notes / Client Name") },
+                        label = { Text("Batch Notes / Workstation Routing") },
                         modifier = Modifier.fillMaxWidth()
                     )
                 }

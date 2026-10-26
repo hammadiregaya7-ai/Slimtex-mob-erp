@@ -20,6 +20,9 @@ interface CommercialDao {
     @Query("SELECT * FROM commercial_orders WHERE type = :type ORDER BY timestamp DESC")
     fun getOrdersByType(type: CommercialType): Flow<List<CommercialOrder>>
 
+    @Query("SELECT * FROM commercial_orders WHERE status = 'PENDING_APPROVAL' ORDER BY timestamp DESC")
+    fun getPendingApprovalOrders(): Flow<List<CommercialOrder>>
+
     @Query("SELECT * FROM commercial_orders WHERE id = :id")
     suspend fun getOrderById(id: Long): CommercialOrder?
 
@@ -40,6 +43,46 @@ interface CommercialDao {
 
     @Query("UPDATE commercial_orders SET paidAmount = paidAmount + :paymentDelta, status = CASE WHEN (paidAmount + :paymentDelta) >= totalAmount THEN 'PAID' ELSE status END WHERE id = :orderId")
     suspend fun recordPayment(orderId: Long, paymentDelta: Double)
+
+    @Query(
+        """
+        UPDATE commercial_orders
+        SET status = 'CONFIRMED',
+            requiresApproval = 0,
+            approvedByRole = :approvedByRole
+        WHERE id = :orderId
+        """
+    )
+    suspend fun approveOrder(orderId: Long, approvedByRole: String)
+
+    @Query(
+        """
+        UPDATE commercial_orders
+        SET packingListNumber = :packingListNumber,
+            totalCartons = :totalCartons,
+            netWeightKg = :netWeightKg,
+            grossWeightKg = :grossWeightKg,
+            hsTariffCode = :hsTariffCode,
+            incoterms = :incoterms,
+            portOfLoading = :portOfLoading,
+            portOfDischarge = :portOfDischarge
+        WHERE id = :orderId
+        """
+    )
+    suspend fun updateExportPackingList(
+        orderId: Long,
+        packingListNumber: String,
+        totalCartons: Int,
+        netWeightKg: Double,
+        grossWeightKg: Double,
+        hsTariffCode: String,
+        incoterms: String,
+        portOfLoading: String,
+        portOfDischarge: String
+    )
+
+    @Query("UPDATE commercial_orders SET linkedBatchNumber = :batchNumber WHERE id = :orderId")
+    suspend fun updateLinkedBatchNumber(orderId: Long, batchNumber: String)
 
     @Query("DELETE FROM commercial_orders WHERE id = :id")
     suspend fun deleteOrder(id: Long)

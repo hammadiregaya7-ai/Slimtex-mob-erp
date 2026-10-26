@@ -10,16 +10,24 @@ import com.example.data.entity.CommercialOrder
 import com.example.data.entity.CommercialOrderItem
 import com.example.data.entity.CommercialType
 import com.example.data.entity.Customer
+import com.example.data.entity.ErpCurrency
+import com.example.data.entity.ErpRole
+import com.example.data.entity.FabricRollLot
 import com.example.data.entity.InventoryItem
 import com.example.data.entity.ItemCategory
 import com.example.data.entity.JournalEntry
 import com.example.data.entity.JournalLine
 import com.example.data.entity.ProductionMaterialItem
 import com.example.data.entity.ProductionOrder
+import com.example.data.entity.RollQualityGrade
+import com.example.data.entity.StockThresholdAlert
 import com.example.data.entity.StockTransaction
+import com.example.data.entity.Supplier
+import com.example.data.entity.SupplierSpecialty
 import com.example.data.entity.TransactionType
 import com.example.data.entity.UnitOfMeasure
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -44,11 +52,29 @@ data class DashboardMetrics(
     val activeBatchesCount: Int = 0,
     val lowStockCount: Int = 0,
     val totalCustomersCount: Int = 0,
-    val customersWithBalanceCount: Int = 0
+    val customersWithBalanceCount: Int = 0,
+    val totalSuppliersCount: Int = 0,
+    val pendingApprovalsCount: Int = 0,
+    val quarantinedRollsCount: Int = 0
 )
 
 class ErpViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: ErpRepository = ErpRepository(AppDatabase.getInstance(application))
+
+    // Active Role & Multi-Currency Display State
+    private val _activeRole = MutableStateFlow(ErpRole.EXECUTIVE_CONTROLLER)
+    val activeRole: StateFlow<ErpRole> = _activeRole.asStateFlow()
+
+    private val _selectedCurrency = MutableStateFlow(ErpCurrency.USD)
+    val selectedCurrency: StateFlow<ErpCurrency> = _selectedCurrency.asStateFlow()
+
+    fun setActiveRole(role: ErpRole) {
+        _activeRole.value = role
+    }
+
+    fun setSelectedCurrency(currency: ErpCurrency) {
+        _selectedCurrency.value = currency
+    }
 
     val inventoryItems: StateFlow<List<InventoryItem>> = repository.allItems
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -56,7 +82,19 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
     val lowStockItems: StateFlow<List<InventoryItem>> = repository.lowStockItems
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val categoryStockSummaries: StateFlow<List<com.example.data.entity.CategoryStockSummary>> = repository.categoryStockSummaries
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val activeThresholdAlerts: StateFlow<List<StockThresholdAlert>> = repository.activeThresholdAlerts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val stockTransactions: StateFlow<List<StockTransaction>> = repository.stockTransactions
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val fabricRollLots: StateFlow<List<FabricRollLot>> = repository.allRollLots
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val suppliers: StateFlow<List<Supplier>> = repository.allSuppliers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val productionOrders: StateFlow<List<ProductionOrder>> = repository.allProductionOrders
@@ -81,17 +119,35 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
     val commercialOrders: StateFlow<List<CommercialOrder>> = repository.allCommercialOrders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val pendingApprovalOrders: StateFlow<List<CommercialOrder>> = repository.pendingApprovalOrders
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val customers: StateFlow<List<Customer>> = repository.allCustomers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private data class ExtraDashboardState(
+        val suppliersCount: Int,
+        val pendingApprovalsCount: Int,
+        val quarantinedRollsCount: Int
+    )
+
+    private val extraDashboardState = combine(
+        suppliers,
+        pendingApprovalOrders,
+        fabricRollLots
+    ) { sups, pending, rolls ->
+        ExtraDashboardState(
+            suppliersCount = sups.size,
+            pendingApprovalsCount = pending.size,
+            quarantinedRollsCount = rolls.count { it.qualityGrade == RollQualityGrade.QUARANTINED }
+        )
+    }
+
     // Live Financial Dashboard Metrics
     val dashboardMetrics: StateFlow<DashboardMetrics> = combine(
-        inventoryItems,
-        accounts,
-        productionOrders,
-        lowStockItems,
-        customers
-    ) { items, accs, orders, lowStock, custs ->
+        combine(inventoryItems, accounts, productionOrders) { a, b, c -> Triple(a, b, c) },
+        combine(lowStockItems, customers, extraDashboardState) { d, e, f -> Triple(d, e, f) }
+    ) { (items, accs, orders), (lowStock, custs, extra) ->
         val totalInv = items.sumOf { it.currentStock * it.averageCost }
         val rawInv = items.filter { it.category == ItemCategory.RAW_MATERIAL || it.category == ItemCategory.TRIM || it.category == ItemCategory.DYE_CHEMICAL }
             .sumOf { it.currentStock * it.averageCost }
@@ -122,7 +178,10 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
             activeBatchesCount = activeBatches,
             lowStockCount = lowStock.size,
             totalCustomersCount = custs.size,
-            customersWithBalanceCount = custs.count { it.currentBalance > 0.01 }
+            customersWithBalanceCount = custs.count { it.currentBalance > 0.01 },
+            totalSuppliersCount = extra.suppliersCount,
+            pendingApprovalsCount = extra.pendingApprovalsCount,
+            quarantinedRollsCount = extra.quarantinedRollsCount
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardMetrics())
 
@@ -130,7 +189,7 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
         _selectedOrderId.value = orderId
     }
 
-    // --- Action Methods ---
+    // --- Inventory & Traceability Action Methods ---
     fun saveInventoryItem(
         id: Long = 0L,
         sku: String,
@@ -142,7 +201,8 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
         averageCost: Double,
         sellingPrice: Double,
         location: String,
-        description: String = ""
+        description: String = "",
+        preferredSupplier: String = "Indus Spinning & Weaving Mills"
     ) {
         viewModelScope.launch {
             repository.saveItem(
@@ -157,7 +217,8 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
                     averageCost = averageCost,
                     sellingPrice = sellingPrice,
                     storageLocation = location,
-                    description = description
+                    description = description,
+                    preferredSupplier = preferredSupplier
                 )
             )
         }
@@ -166,6 +227,36 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteInventoryItem(id: Long) {
         viewModelScope.launch {
             repository.deleteItem(id)
+        }
+    }
+
+    fun updateItemThresholdConfig(
+        itemId: Long,
+        reorderLevel: Double,
+        criticalThreshold: Double,
+        autoAlertEnabled: Boolean,
+        leadTimeDays: Int
+    ) {
+        viewModelScope.launch {
+            repository.updateItemThresholdConfig(
+                itemId = itemId,
+                reorderLevel = reorderLevel,
+                criticalThreshold = criticalThreshold,
+                autoAlertEnabled = autoAlertEnabled,
+                leadTimeDays = leadTimeDays
+            )
+        }
+    }
+
+    fun acknowledgeThresholdAlert(alertId: Long) {
+        viewModelScope.launch {
+            repository.acknowledgeThresholdAlert(alertId)
+        }
+    }
+
+    fun generatePurchaseOrderForLowStockAlert(alert: StockThresholdAlert) {
+        viewModelScope.launch {
+            repository.generatePurchaseOrderForLowStockAlert(alert, _activeRole.value)
         }
     }
 
@@ -182,6 +273,119 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // --- Fabric Roll & Dye-Lot Traceability ---
+    fun saveFabricRollLot(
+        id: Long = 0L,
+        rollNumber: String,
+        dyeLotCode: String,
+        itemId: Long,
+        itemSku: String,
+        itemName: String,
+        supplierName: String,
+        shadeBand: String,
+        lengthMeters: Double,
+        gsm: Int,
+        widthCm: Int,
+        shrinkagePercent: Double,
+        defectPoints: Int,
+        qualityGrade: RollQualityGrade,
+        batchUsedIn: String,
+        inspectorNotes: String
+    ) {
+        viewModelScope.launch {
+            repository.saveRollLot(
+                FabricRollLot(
+                    id = id,
+                    rollNumber = rollNumber,
+                    dyeLotCode = dyeLotCode,
+                    itemId = itemId,
+                    itemSku = itemSku,
+                    itemName = itemName,
+                    supplierName = supplierName,
+                    shadeBand = shadeBand,
+                    lengthMeters = lengthMeters,
+                    gsm = gsm,
+                    widthCm = widthCm,
+                    shrinkagePercent = shrinkagePercent,
+                    defectPointsPer100SqYds = defectPoints,
+                    qualityGrade = qualityGrade,
+                    batchUsedIn = batchUsedIn,
+                    inspectorNotes = inspectorNotes
+                )
+            )
+        }
+    }
+
+    fun updateRollInspection(
+        rollId: Long,
+        defectPoints: Int,
+        grade: RollQualityGrade,
+        shadeBand: String,
+        notes: String
+    ) {
+        viewModelScope.launch {
+            repository.updateRollInspection(rollId, defectPoints, grade, shadeBand, notes)
+        }
+    }
+
+    fun deleteFabricRollLot(id: Long) {
+        viewModelScope.launch {
+            repository.deleteRollLot(id)
+        }
+    }
+
+    // --- Supplier / Mill Directory Operations ---
+    fun saveSupplier(
+        id: Long = 0L,
+        code: String,
+        name: String,
+        specialty: SupplierSpecialty = SupplierSpecialty.FABRIC_WEAVING_MILL,
+        contactPerson: String = "",
+        email: String = "",
+        phone: String = "",
+        country: String = "",
+        currencyCode: String = "USD",
+        leadTimeDays: Int = 10,
+        qualityRating: Double = 4.8,
+        paymentTerms: String = "Net 30",
+        apBalance: Double = 0.0,
+        notes: String = ""
+    ) {
+        viewModelScope.launch {
+            repository.saveSupplier(
+                Supplier(
+                    id = id,
+                    code = code,
+                    name = name,
+                    specialty = specialty,
+                    contactPerson = contactPerson,
+                    email = email,
+                    phone = phone,
+                    country = country,
+                    currencyCode = currencyCode,
+                    leadTimeDays = leadTimeDays,
+                    qualityRating = qualityRating,
+                    paymentTerms = paymentTerms,
+                    apBalance = apBalance,
+                    notes = notes
+                )
+            )
+        }
+    }
+
+    fun deleteSupplier(id: Long) {
+        viewModelScope.launch {
+            repository.deleteSupplier(id)
+        }
+    }
+
+    fun recordSupplierDirectPayment(supplierId: Long, amount: Double, memo: String = "Mill AP Settlement") {
+        viewModelScope.launch {
+            repository.recordSupplierDirectPayment(supplierId, amount, memo)
+        }
+    }
+
+    // --- Production Operations ---
     fun createProductionOrder(
         batchNumber: String,
         finishedItemId: Long,
@@ -229,24 +433,84 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // --- Commercial Orders, Document Chaining, Approval Gates & Packing Lists ---
+    fun getCommercialOrderItems(orderId: Long): Flow<List<CommercialOrderItem>> =
+        repository.getCommercialOrderItems(orderId)
+
     fun createCommercialOrder(
         orderNumber: String,
         type: CommercialType,
         partyName: String,
         notes: String,
         items: List<CommercialOrderItem>,
-        customerId: Long = 0L
+        customerId: Long = 0L,
+        supplierId: Long = 0L,
+        currencyCode: String = _selectedCurrency.value.code,
+        exchangeRateToUsd: Double = _selectedCurrency.value.rateToUsd,
+        incoterms: String = "FOB"
     ) {
         viewModelScope.launch {
             repository.createCommercialOrder(
-                CommercialOrder(
+                order = CommercialOrder(
                     orderNumber = orderNumber,
                     type = type,
                     partyName = partyName,
                     customerId = customerId,
+                    supplierId = supplierId,
+                    currencyCode = currencyCode,
+                    exchangeRateToUsd = exchangeRateToUsd,
+                    incoterms = incoterms,
                     notes = notes
                 ),
-                items
+                items = items,
+                activeRole = _activeRole.value
+            )
+        }
+    }
+
+    fun approveCommercialOrder(orderId: Long) {
+        viewModelScope.launch {
+            repository.approveCommercialOrder(orderId, _activeRole.value.displayName)
+        }
+    }
+
+    fun chainQuotationToWorkOrder(quoteId: Long) {
+        viewModelScope.launch {
+            val newOrderId = repository.chainQuotationToWorkOrder(quoteId)
+            if (newOrderId != 0L) {
+                _selectedOrderId.value = newOrderId
+            }
+        }
+    }
+
+    fun chainQuotationToInvoice(quoteId: Long) {
+        viewModelScope.launch {
+            repository.chainQuotationToInvoice(quoteId, _activeRole.value)
+        }
+    }
+
+    fun updateExportPackingList(
+        orderId: Long,
+        packingListNumber: String,
+        totalCartons: Int,
+        netWeightKg: Double,
+        grossWeightKg: Double,
+        hsTariffCode: String,
+        incoterms: String,
+        portOfLoading: String,
+        portOfDischarge: String
+    ) {
+        viewModelScope.launch {
+            repository.updateExportPackingList(
+                orderId = orderId,
+                packingListNumber = packingListNumber,
+                totalCartons = totalCartons,
+                netWeightKg = netWeightKg,
+                grossWeightKg = grossWeightKg,
+                hsTariffCode = hsTariffCode,
+                incoterms = incoterms,
+                portOfLoading = portOfLoading,
+                portOfDischarge = portOfDischarge
             )
         }
     }
@@ -302,7 +566,7 @@ class ErpViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun getCustomerOrders(customerId: Long): kotlinx.coroutines.flow.Flow<List<CommercialOrder>> {
+    fun getCustomerOrders(customerId: Long): Flow<List<CommercialOrder>> {
         return repository.getCustomerOrders(customerId)
     }
 
